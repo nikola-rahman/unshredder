@@ -32,3 +32,12 @@ different batches. Unplaced strips/open ends stay in a pool indefinitely; more b
    pages leave the pool). Cost per batch ~ new strips x open edges; pieces can grow across batches.
 3. If needed: coarse pre-filter (compact edge descriptor + ANN retrieval of ~200) before the full
    model; validate recall@K of the true neighbour first.
+
+## Upside-down strips (raised 2026-10-30)
+The app assumes every strip is upright; the shred simulator never flips strips. Real scans will contain
+strips rotated 180 deg (left/right edges swapped, text upside down) -> unplaceable or wrong joins.
+Plan: (1) orientation classifier per strip (trained on randomly rotated strips; text has a clear "up":
+baselines, descenders/ascenders incl. Cyrillic ц щ д); (2) keep both orientations for uncertain
+(near-blank) strips — reconstruct.py/link_by_confidence already support n_orient; (3) "rotate 180"
+button in the review; (4) random flips in the simulator so metrics cover it.
+Related: face-down strips (back of page; double-sided documents), mixed shredders (different widths).

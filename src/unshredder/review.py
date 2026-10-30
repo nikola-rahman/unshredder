@@ -222,6 +222,30 @@ class ReviewEngine:
         order = np.argsort(-p)[:k]
         return [(END if i == len(cands) else int(cands[i]), float(p[i])) for i in order]
 
+    def batch(self, n: int, later: list[int] = ()) -> list[tuple[int, int, float]]:
+        """Up to n questions for quick confirmation: (a, the model's best option b, its
+        probability), most confident first, never proposing the same strip twice (so all
+        verdicts in a batch can be applied together). Questions saved for later are skipped."""
+        held = set(later)
+        rows = np.array([a for a in self.session.open_edges() if a not in held], int)
+        if not len(rows):
+            return []
+        C, P = self.session.option_matrix(rows)
+        best = P.argmax(1)
+        pm = P[np.arange(len(rows)), best]
+        out, used = [], set()
+        for r in np.argsort(-pm, kind="stable"):
+            if pm[r] <= 0:
+                break
+            b = END if best[r] == C.shape[1] else int(C[r, best[r]])
+            if b != END and b in used:
+                continue
+            used.add(b)
+            out.append((int(rows[r]), b, float(pm[r])))
+            if len(out) >= n:
+                break
+        return out
+
     def ranked(self, a: int, side: str = "right") -> list[tuple[int, float]]:
         """EVERY strip that could still go right of a (side="right") or left of a ("left"),
         ranked by the model, with probabilities over all of them + the page edge (END, last

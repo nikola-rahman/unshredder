@@ -236,3 +236,36 @@ def test_finished_pieces_listed_separately(tmp_path, monkeypatch):
     r = client.get(f"/jobs/{job}/review/pieces").json()
     assert r["finished_total"] == 1 and r["todo_total"] == r["total"] - 1
     assert [p["finished"] for p in r["pieces"]][-1] is True and not any(p["finished"] for p in r["pieces"][:-1])
+
+
+def test_quick_confirm_batch(tmp_path, monkeypatch):
+    def fake_scores(strips, model_path, max_shift):
+        n = len(strips)
+        return np.random.default_rng(5).normal(size=(n, n)).astype(np.float32) * 3, np.full((n, 1), 0.0)
+
+    monkeypatch.setattr(server.seamnet, "scores", fake_scores)
+    client = TestClient(server.create_app("m.pt", str(tmp_path)))
+    job = client.post("/jobs", files=[("files", ("a.png", _page(seed=8), "image/png")), ("files", ("b.png", _page(seed=9), "image/png"))],
+                      data={"mode": "scan"}).json()["job"]
+    _wait(client, job)
+    client.post(f"/jobs/{job}/shred", data={"strips_per_page": 10})
+    _wait(client, job, ("shredded", "failed"))
+    client.post(f"/jobs/{job}/unshred")
+    _wait(client, job, ("done", "failed"))
+    client.post(f"/jobs/{job}/review/start")
+    items = client.get(f"/jobs/{job}/review/batch", params={"n": 6}).json()["items"]
+    assert 0 < len(items) <= 6
+    strips_proposed = [it["b"] for it in items if it["b"] != "end"]
+    assert len(strips_proposed) == len(set(strips_proposed))  # never the same strip twice
+    assert len({it["a"] for it in items}) == len(items) and all(0 <= it["focus_y"] <= 1 for it in items)
+    verdicts = [{"a": it["a"], "b": it["b"], "v": v} for it, v in zip(items, ["yes", "no", "later", "yes", "no", "yes"])]
+    r = client.post(f"/jobs/{job}/review/batch_answer", data={"items": json.dumps(verdicts)}).json()
+    assert all(x["applied"] for x in r["results"]) and all("correct" in x for x in r["results"] if x["v"] != "later")
+    st = client.get(f"/jobs/{job}/review/state").json()
+    kinds = [a["kind"] for a in st["answers"]]
+    assert kinds.count("link") == sum(v["v"] == "yes" for v in verdicts)
+    assert kinds.count("reject") == sum(v["v"] == "no" for v in verdicts) and st["later"] == 1
+    # a pair marked wrong is never proposed again
+    no = {(v["a"], v["b"]) for v in verdicts if v["v"] == "no"}
+    again = client.get(f"/jobs/{job}/review/batch", params={"n": 40}).json()["items"]
+    assert not any((it["a"], it["b"]) in no for it in again)

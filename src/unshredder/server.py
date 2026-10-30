@@ -382,7 +382,7 @@ class ReviewManager:
         key = (job, local)
         if key not in self.images:
             g = self._load_meta(job)["inked"][local]
-            self.images[key] = np.asarray(Image.open(self.store.dir(job) / "strips" / f"{g}.png"), dtype=np.float32) / 255
+            self.images[key] = np.asarray(Image.open(self.store.dir(job) / "strips" / f"{g}.png").convert("L"))  # uint8
         im = self.images[key]
         w = max(1, round(im.shape[1] * height / im.shape[0]))
         return np.asarray(_to_img(im).resize((w, height), Image.LANCZOS), dtype=np.float32) / 255
@@ -587,6 +587,7 @@ def create_app(model_path: str, jobs_root: str) -> FastAPI:
 
     review = ReviewManager(store)
     store.model_path = model_path
+    strip_png: dict[tuple, bytes] = {}
 
     def busy(d: Path) -> None:
         if store.status(d).get("state") in ("queued", "running"):
@@ -681,6 +682,93 @@ def create_app(model_path: str, jobs_root: str) -> FastAPI:
     def review_state(job_id: str, k: int = 5, focus: int = -1, offset: int = 0):
         with review.lock(job_id):
             return review.state(job_id, max(1, min(30, k)), None if focus < 0 else focus, max(0, offset))
+
+    @app.get("/jobs/{job_id}/review/batch")
+    def review_batch(job_id: str, n: int = 15, h: int = 1400):
+        """Quick confirm: the model's single best guess for up to n open seams, with the
+        strips to show and where along the seam most of the text is (focus_y, 0..1)."""
+        with review.lock(job_id):
+            eng = review.engine(job_id)
+            later = [x for x in getattr(eng, "later", []) if eng.session.right[x] is None]
+            sess = eng.session
+            items = []
+            n = max(1, min(40, n))
+            for a, b, p in eng.batch(4 * n, later):
+                if len(items) >= n:
+                    break
+                ink_a = 1 - review.strip(job_id, a, 400)[:, -6:].mean(1)  # darkness along the seam
+                ink_b = 1 - review.strip(job_id, b, 400)[:, :6].mean(1) if b != END else np.zeros_like(ink_a)
+                if (ink_a > 0.25).mean() < 0.01 and (ink_b > 0.25).mean() < 0.01:
+                    continue  # (almost) no ink at the join: nothing to judge quickly
+                ink = ink_a + ink_b
+                win = max(1, len(ink) // 5)
+                dense = np.convolve(ink, np.ones(win), "valid")
+                focus_y = (int(np.argmax(dense)) + win / 2) / len(ink)
+                left = [int(x) for x in sess.left_context(a, 3)]
+                right = [] if b == END else [int(x) for x in sess.right_context(b, 3)]
+                items.append({"a": a, "b": "end" if b == END else int(b), "p": round(p, 4), "focus_y": round(focus_y, 3),
+                              "left": left, "right": right,
+                              # widths at height h (as in card.webp), to place the blue/orange marks
+                              "widths": [max(1, round(review.native_width(job_id, x) * h / review.images[(job_id, x)].shape[0]))
+                                         for x in left + right]})
+            return {"items": items, "progress": eng.progress()}
+
+    @app.get("/jobs/{job_id}/review/card.webp")
+    def review_card(job_id: str, ids: str, h: int = 1400):
+        """Several strips side by side as ONE image (fewer requests on slow connections),
+        WebP-compressed. ids: comma-separated strip numbers, left to right."""
+        try:
+            strips = [int(x) for x in ids.split(",") if x != ""][:12]
+        except ValueError:
+            raise HTTPException(400, "bad ids")
+        h = max(100, min(2400, h))
+        key = ("card", job_id, tuple(strips), h)
+        data = strip_png.get(key)
+        if data is None:
+            meta = review._load_meta(job_id)
+            if not strips or not all(0 <= x < len(meta["inked"]) for x in strips):
+                raise HTTPException(404, "no such strip")
+            buf = io.BytesIO()
+            _to_img(np.hstack([review.strip(job_id, x, h) for x in strips])).save(buf, "WEBP", quality=88, method=4)
+            data = strip_png[key] = buf.getvalue()
+        return Response(data, media_type="image/webp", headers={"Cache-Control": "private, max-age=86400"})
+
+    @app.post("/jobs/{job_id}/review/batch_answer")
+    def review_batch_answer(job_id: str, items: str = Form(...)):
+        """items: JSON list of {"a", "b" (strip or "end"), "v": "yes" | "no" | "later"}.
+        yes joins the pair; no forbids that pair (the seam is asked again with the next
+        option); later moves the seam to the back of the queue."""
+        try:
+            verdicts = json.loads(items)
+        except ValueError:
+            raise HTTPException(400, "items must be JSON")
+        with review.lock(job_id):
+            eng = review.engine(job_id)
+            tr = review._load_meta(job_id).get("truth_right")
+            results, rejects = [], []
+            for it in verdicts:
+                a, b, v = int(it["a"]), END if it["b"] == "end" else int(it["b"]), it["v"]
+                res = {"a": a, "b": it["b"], "v": v}
+                if v == "yes":
+                    ok = eng.session.right[a] is None and eng.session.can_link(a, b)
+                    if ok:
+                        eng.answer(a, b)
+                    res["applied"] = ok
+                    if tr:
+                        res["correct"] = tr[a] == b
+                elif v == "no":
+                    rejects.append((a, b))
+                    res["applied"] = True
+                    if tr:
+                        res["correct"] = tr[a] != b
+                elif v == "later":
+                    eng.later = [x for x in getattr(eng, "later", []) if x != a] + [a]
+                    res["applied"] = True
+                results.append(res)
+            if rejects:
+                eng.reject(rejects)
+            review.save(job_id)
+            return {"results": results, "progress": eng.progress()}
 
     @app.get("/jobs/{job_id}/review/piece")
     def review_piece_info(job_id: str, strip: int):
@@ -788,14 +876,21 @@ def create_app(model_path: str, jobs_root: str) -> FastAPI:
 
     @app.get("/jobs/{job_id}/review/strip/{local}.png")
     def review_strip(job_id: str, local: int, h: int = 1800):
-        with review.lock(job_id):
+        # Strip images never change within a job: no review lock (requests run in parallel)
+        # and the encoded PNG is cached.
+        h = max(100, min(2400, h))
+        key = (job_id, local, h)
+        png = strip_png.get(key)
+        if png is None:
             meta = review._load_meta(job_id)
             if not 0 <= local < len(meta["inked"]):
                 raise HTTPException(404, "no such strip")
-            im = _to_img(review.strip(job_id, local, max(100, min(2400, h))))
-        buf = io.BytesIO()
-        im.save(buf, "PNG", compress_level=3)
-        return Response(buf.getvalue(), media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
+            buf = io.BytesIO()
+            _to_img(review.strip(job_id, local, h)).save(buf, "PNG", compress_level=1)
+            png = strip_png[key] = buf.getvalue()
+            if len(strip_png) > 20000:  # bound memory (~1 GB at reading size)
+                strip_png.pop(next(iter(strip_png)))
+        return Response(png, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
     @app.get("/jobs/{job_id}/review/preview.png")
     def review_preview_png(job_id: str, anchor: int, cand: str, h: int = 1100, ctx: int = 6, part: str = "all"):

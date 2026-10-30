@@ -51,6 +51,7 @@
   .seam-hit:hover::before { content: "✂"; position: absolute; top: 4px; left: -2px; color: var(--bad); font-size: 16px; background: #fff; border-radius: 4px; }
   .piece .cap { padding: 6px 8px; font-size: 13px; color: #333; background: #fafaf8; border-top: 1px solid #eee; }
   .bad-text { color: var(--bad); }
+  .more-pieces { display: grid; place-items: center; min-height: 120px; background: transparent; }
   dialog { max-width: 95vw; max-height: 95vh; padding: 0; border: 0; border-radius: 10px; }
   dialog img { max-width: 95vw; max-height: 90vh; display: block; }
 
@@ -95,6 +96,27 @@
   .pc .meta b { display: block; font-size: 16px; color: var(--ink); }
   .meter { height: 6px; border-radius: 3px; background: var(--line); margin: 6px 0; overflow: hidden; }
   .meter i { display: block; height: 100%; background: var(--accent); }
+  .qgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+  .qc { border: 2px solid var(--line); border-radius: 10px; background: var(--card); overflow: hidden; }
+  .qc.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .qc.yes { border-color: var(--good); }
+  .qc.no { border-color: var(--bad); }
+  .qc.later { border-color: var(--muted); opacity: .75; }
+  .qc header { display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; font-size: 12px; color: var(--ink2); }
+  .qc .verdict { font-weight: 700; font-size: 13px; }
+  .qc .win2 { height: 340px; overflow-y: auto; overflow-x: hidden; background: #fff; }
+  .qc .row2 { display: flex; justify-content: center; }
+  .qc .row2 img { display: block; height: 1400px; width: auto; min-width: 0; min-height: 0; }  /* natural aspect ratio */
+  .qc .row2 .one { display: flex; flex: none; }
+  .qc .row2 .col { position: relative; flex: none; background-repeat: no-repeat; background-color: #fff; cursor: ns-resize; touch-action: none; }
+  .qc .row2 .col.anchor::after, .qc .row2 .col.qcand::after { content: ""; position: absolute; inset: 0; pointer-events: none; }
+  .qc .row2 .col.anchor::after { background: rgba(42,120,214,.13); border-top: 6px solid #2a78d6; }
+  .qc .row2 .col.qcand::after { background: rgba(222,120,20,.15); border-top: 6px solid #de7814; }
+  .qc .row2 .t.anchor::after { content: ""; position: absolute; inset: 0; background: rgba(42,120,214,.13); }
+  .qc .row2 .t.qcand::after { content: ""; position: absolute; inset: 0; background: rgba(222,120,20,.15); }
+  .qc .row2 .edge2 { width: 40px; height: 1400px; background: repeating-linear-gradient(135deg, #e2e1dc 0 6px, #ecebe6 6px 12px); }
+  .qc .btns { display: flex; gap: 6px; padding: 6px 8px; }
+  .qc .btns button { flex: 1; padding: 4px 0; font-size: 13px; }
   .viewer { overflow: auto; max-height: 82vh; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
   .viewer .frame { position: relative; width: max-content; }
   .viewer img { display: block; }
@@ -222,6 +244,7 @@
           <select id="ctx" style="width:auto;padding:5px 8px;margin-left:4px">
             <option value="3">3 strips per side</option><option value="6" selected>6 strips per side</option><option value="10">10 strips per side</option>
           </select></label>
+        <button class="primary" id="quickBtn" title="Confirm the model's best guesses many at a time">⚡ Quick confirm</button>
         <button class="ghost" id="piecesBtn" title="Pick a piece and finish it">▦ Pieces</button>
         <button class="ghost" id="undoBtn" title="Undo (U)">Undo <kbd>U</kbd></button>
         <button class="primary" id="finishBtn">Finish</button>
@@ -260,6 +283,21 @@
       <b>Every seam is decided.</b>
       <span class="hint">Finish to see the reviewed pages.</span>
     </div>
+  </section>
+
+  <section class="card" id="quickCard" hidden>
+    <div class="review-head">
+      <h2>Quick confirm <span class="hint" id="quickInfo"></span></h2>
+      <div class="actions" style="margin:0">
+        <button class="ghost" id="quickBack">← Detailed review</button>
+        <button class="primary" id="quickSubmit">Submit <kbd>Enter</kbd></button>
+      </div>
+    </div>
+    <div class="bar"><i id="quickBar"></i></div>
+    <p class="hint" style="margin:6px 0 10px">The model's best guess for each seam: <span style="color:#2a78d6">blue</span> is the strip, <span style="color:#de7814">orange</span> its proposed right neighbour.
+      Each window opens where the join has the most text; scroll inside it if needed.
+      <kbd>Y</kbd> right · <kbd>N</kbd> wrong (never proposed again) · <kbd>S</kbd> not sure · <kbd>←</kbd>/<kbd>→</kbd> next/previous card · drag any strip up/down (<kbd>↑</kbd>/<kbd>↓</kbd> moves the orange one, double-click resets) · <kbd>Enter</kbd> submit all and load the next.</p>
+    <div class="qgrid" id="qgrid"></div>
   </section>
 
   <section class="card" id="viewerCard" hidden>
@@ -303,7 +341,7 @@ function setStep(name) {
     el.classList.toggle("active", j === i); el.classList.toggle("done", j < i);
   });
 }
-const CARDS = ["setup", "scanCard", "pileCard", "resultCard", "reviewCard", "finalCard", "viewerCard"];  // the upload box only on a new job
+const CARDS = ["setup", "scanCard", "pileCard", "resultCard", "reviewCard", "finalCard", "viewerCard", "quickCard"];  // the upload box only on a new job
 const only = (...ids) => CARDS.forEach(c => show(c, ids.includes(c)));
 setStep("scan");
 
@@ -329,7 +367,7 @@ $("drop").ondrop = e => { e.preventDefault(); $("drop").classList.remove("over")
 const pct = v => `${Math.round(v * 100)}%`;
 // model confidence: never shown as certain; one decimal near the ends
 const conf = v => v >= 0.999 ? "≥99.9%" : v < 0.001 ? "<0.1%" : (v > 0.99 || v < 0.01) ? `${(v * 100).toFixed(1)}%` : `${Math.round(v * 100)}%`;
-const toast = msg => { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 1600); };
+const toast = (msg, ms = 1600) => { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), ms); };
 async function api(path, opts = {}) {
   const r = await fetch(`/api/jobs/${path}`, opts);
   const j = await r.json().catch(() => ({}));
@@ -358,11 +396,17 @@ function metricCells(m, extra) {
   return cells.concat(extra).map(([k, v, h]) => `<div class="metric"><b>${v}</b><span>${k}${h ? " — " + h : ""}</span></div>`).join("");
 }
 function zoomable(root) { root.querySelectorAll("img").forEach(img => img.onclick = () => { $("zoomImg").src = img.dataset.full || img.src; $("zoom").showModal(); }); }
-function pieceGrid(el, pieces, url) {
-  el.innerHTML = [...pieces].sort((a, b) => b.strips - a.strips).map(p => `
+// only the largest pieces are drawn (a big job has thousands; on a slow connection their pictures
+// would queue ahead of everything else); "show more" adds the next ones
+function pieceGrid(el, pieces, url, limit = 40) {
+  const all = [...pieces].sort((a, b) => b.strips - a.strips);
+  el.innerHTML = all.slice(0, limit).map(p => `
     <div class="piece"><img loading="lazy" src="${url(p.id)}" alt="piece ${p.id}">
-      <div class="cap">${p.strips} strips${p.mostly_from ? ` · mostly ${p.mostly_from}` : ""}${p.review_seams ? ` · <span class="bad-text">${p.review_seams} unsure</span>` : ""}</div></div>`).join("");
+      <div class="cap">${p.strips} strips${p.mostly_from ? ` · mostly ${p.mostly_from}` : ""}${p.review_seams ? ` · <span class="bad-text">${p.review_seams} unsure</span>` : ""}</div></div>`).join("")
+    + (all.length > limit ? `<div class="piece more-pieces"><button class="ghost">Show ${Math.min(40, all.length - limit)} more (${all.length - limit} smaller pieces)</button></div>` : "");
   zoomable(el);
+  const more = el.querySelector(".more-pieces button");
+  if (more) more.onclick = () => pieceGrid(el, pieces, url, limit + 40);
 }
 
 function showScans(s) {
@@ -427,7 +471,11 @@ $("zoom").onclick = () => $("zoom").close();
     job = id;
     let s = await api(id);
     if (["queued", "running"].includes(s.state)) s = await poll(id);
-    if (s.state === "done" && s.result) { showResult(s.result); toast("Job restored"); }
+    if (s.state === "done" && s.result) {
+      // a job under review reopens straight in the review (the overview's piece pictures are big)
+      try { await api(`${id}/review/state?k=5`); startReview(); toast("Job restored"); }
+      catch (e) { showResult(s.result); toast("Job restored"); }
+    }
     else if (s.state === "shredded" && s.shred) { showPile(s); toast("Job restored"); }
     else if (s.state === "scanned" && s.scan) { showScans(s); toast("Job restored"); }
   } catch (e) { job = null; history.replaceState(null, "", location.pathname); }
@@ -593,6 +641,109 @@ function renderFocus(s) {
   if (f.done && !shownDone.has(key)) { shownDone.add(key); toast("This piece is finished: read it through"); viewPiece(f.strip); }
 }
 let viewing = null, pieceTab = "todo";
+
+// ---------- quick confirm: many best guesses at once, verdicts submitted together
+let qItems = [], qVerdict = new Map(), qSel = 0, qBusy = false;
+const qKey = it => `${it.a}>${it.b}`;
+async function openQuick() {
+  only("quickCard"); setStep("review");
+  $("qgrid").innerHTML = `<span class="hint">Loading proposals…</span>`;
+  const r = await api(`${job}/review/batch?n=15&h=1400`);
+  qItems = r.items; qVerdict = new Map(); qSel = 0;
+  const p = r.progress;
+  $("quickBar").style.width = pct(p.decided / Math.max(1, p.strips));
+  $("quickInfo").textContent = `— ${p.decided} of ${p.strips} seams decided · ${qItems.length} proposals`;
+  if (!qItems.length) { $("qgrid").innerHTML = `<p class="hint">No proposals left. Use the detailed review for the remaining seams.</p>`; return; }
+  const QH = 1400;
+  const cardHtml = it => {
+    const ids = it.left.concat(it.right);
+    const ws = it.widths, total = ws.reduce((x, y) => x + y, 0);
+    const xs = ws.map((_, i) => ws.slice(0, i).reduce((x, y) => x + y, 0));
+    const ai = it.left.length - 1, ci = it.left.length;  // anchor and candidate positions
+    // one downloaded image per card, shown as one column per strip (each column shows its own
+    // slice of the image), so every strip can be slid up/down on its own without extra requests
+    const url = `/api/jobs/${job}/review/card.webp?ids=${ids.join(",")}&h=${QH}`;
+    const cols = ids.map((id, i) => `<div class="col ${i === ai ? "anchor" : i === ci ? "qcand" : ""}" data-x="${xs[i]}"
+        style="width:${ws[i]}px;height:${QH}px;background-image:url('${url}');background-size:${total}px ${QH}px;background-position:${-xs[i]}px 0px"></div>`).join("");
+    const edge = it.b === "end" ? `<div class="edge2" title="page ends here"></div>` : "";
+    return `<div class="one" style="height:${QH}px">${cols}</div>${edge}`;
+  };
+  $("qgrid").innerHTML = qItems.map((it, i) => `
+    <div class="qc" data-i="${i}">
+      <header><span>${conf(it.p)} model confidence</span><span class="verdict"></span></header>
+      <div class="win2"><div class="row2">${cardHtml(it)}</div></div>
+      <div class="btns"><button class="ghost" data-v="yes">✓ Y</button><button class="ghost" data-v="no">✗ N</button><button class="ghost" data-v="later">? S</button></div>
+    </div>`).join("");
+  $("qgrid").querySelectorAll(".qc").forEach(el => {
+    const i = Number(el.dataset.i), w = el.querySelector(".win2");
+    const scrollTo = () => { w.scrollTop = Math.max(0, qItems[i].focus_y * QH - w.clientHeight / 2); };
+    scrollTo(); el.querySelectorAll("img").forEach(img => img.addEventListener("load", scrollTo, { once: true }));
+    el.onclick = () => qSelect(i);
+    el.querySelectorAll(".col").forEach(col => {
+      col.onpointerdown = e => {
+        e.preventDefault(); e.stopPropagation(); col.setPointerCapture(e.pointerId); qSelect(i);
+        const y0 = e.clientY, d0 = Number(col.dataset.dy || 0);
+        col.onpointermove = ev => qShift(col, d0 + ev.clientY - y0);
+        col.onpointerup = () => { col.onpointermove = col.onpointerup = null; };
+      };
+      col.ondblclick = e => { e.stopPropagation(); qShift(col, 0); };
+    });
+    el.querySelectorAll(".btns button").forEach(b => b.onclick = e => { e.stopPropagation(); qSelect(i); qSet(b.dataset.v); });
+  });
+  qSelect(0);
+}
+function qShift(col, dy) {
+  dy = Math.max(-400, Math.min(400, Math.round(dy)));
+  col.dataset.dy = dy;
+  col.style.backgroundPosition = `${-Number(col.dataset.x)}px ${dy}px`;
+}
+function qSelect(i) {
+  qSel = Math.max(0, Math.min(qItems.length - 1, i));
+  $("qgrid").querySelectorAll(".qc").forEach((el, j) => el.classList.toggle("sel", j === qSel));
+  const el = $("qgrid").querySelector(`.qc[data-i="${qSel}"]`);
+  if (el) el.scrollIntoView({ block: "nearest" });
+}
+function qSet(v) {
+  const it = qItems[qSel]; if (!it) return;
+  qVerdict.set(qSel, v);
+  const el = $("qgrid").querySelector(`.qc[data-i="${qSel}"]`);
+  el.classList.remove("yes", "no", "later"); el.classList.add(v);
+  el.querySelector(".verdict").textContent = v === "yes" ? "✓ right" : v === "no" ? "✗ wrong" : "? not sure";
+  if (qSel < qItems.length - 1) qSelect(qSel + 1);
+}
+async function qSubmit() {
+  if (qBusy) return;
+  const items = [...qVerdict.entries()].map(([i, v]) => ({ a: qItems[i].a, b: qItems[i].b, v }));
+  if (!items.length) { toast("Mark some proposals first (Y / N / S)"); return; }
+  qBusy = true;
+  try {
+    const r = await api(`${job}/review/batch_answer`, { method: "POST", body: form({ items: JSON.stringify(items) }) });
+    const graded = r.results.filter(x => x.correct !== undefined);
+    const right = graded.filter(x => x.correct).length;
+    const summary = `${items.length} verdicts applied` + (graded.length
+      ? ` · ${right} of your ${graded.length} Y/N verdicts match the original pages` + (graded.length - right ? ` (${graded.length - right} don't)` : "") : "");
+    toast(summary, 5000);
+    await openQuick();
+    $("quickInfo").textContent += ` · last batch: ${summary}`;
+  } catch (e) { toast(e.message); } finally { qBusy = false; }
+}
+$("quickBtn").onclick = openQuick;
+$("quickSubmit").onclick = qSubmit;
+$("quickBack").onclick = async () => { only("reviewCard"); renderState(await api(`${job}/review/state?k=5&focus=${focus}`)); };
+document.addEventListener("keydown", e => {
+  if ($("quickCard").hidden || e.metaKey || e.ctrlKey || e.altKey || e.target.tagName === "INPUT") return;
+  const key = e.key.toLowerCase();
+  if (key === "y") { e.preventDefault(); qSet("yes"); }
+  else if (key === "n") { e.preventDefault(); qSet("no"); }
+  else if (key === "s") { e.preventDefault(); qSet("later"); }
+  else if (e.key === "ArrowRight") { e.preventDefault(); qSelect(qSel + 1); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); qSelect(qSel - 1); }
+  else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+    const col = $("qgrid").querySelector(`.qc[data-i="${qSel}"] .col.qcand`);
+    if (col) { e.preventDefault(); qShift(col, Number(col.dataset.dy || 0) + (e.key === "ArrowUp" ? -1 : 1) * (e.shiftKey ? 10 : 1)); }
+  }
+  else if (e.key === "Enter") { e.preventDefault(); qSubmit(); }
+});
 const shownDone = new Set();
 async function viewPiece(strip) {
   viewing = strip;
@@ -644,7 +795,7 @@ async function openPieces() {
 $("piecesBtn").onclick = () => $("piecesPanel").hidden ? openPieces() : (show("piecesPanel", false), current && renderState(current));
 function renderAnswers(list) {
   $("answersCount").textContent = `(${list.length})`;
-  const label = x => x.kind === "reject" ? `✂ Cut the join ${x.a} | ${x.b}` : x.kind === "start" ? `Page starts at strip ${x.a}` : x.b === "end" ? `Page ends after strip ${x.a}` : `Joined strip ${x.a} → ${x.b}`;
+  const label = x => x.kind === "reject" ? (x.b === "end" ? `✗ Not a page end: strip ${x.a}` : `✗ Not neighbours / cut: ${x.a} | ${x.b}`) : x.kind === "start" ? `Page starts at strip ${x.a}` : x.b === "end" ? `Page ends after strip ${x.a}` : `Joined strip ${x.a} → ${x.b}`;
   const check = x => x.correct === undefined ? "" : x.correct ? ` <span style="color:var(--good)">✓</span>` : ` <span class="bad-text">✗ wrong</span>`;
   $("answers").innerHTML = [...list].reverse().map(x => `
     <div class="ans">${x.kind === "link" ? `<img loading="lazy" src="/api/jobs/${job}/review/preview.png?anchor=${x.a}&cand=${x.b}&h=400&ctx=3" alt="">` : ""}
@@ -681,12 +832,16 @@ $("cutBtn").onclick = async () => {
   if (s) { k = 5; renderState(s); }
 };
 
-function cutGrid(el, pieces) {
-  el.innerHTML = [...pieces].sort((a, b) => b.strips - a.strips).map(p => `
+function cutGrid(el, pieces, limit = 40) {
+  const all = [...pieces].sort((a, b) => b.strips - a.strips);
+  el.innerHTML = all.slice(0, limit).map(p => `
     <div class="piece"><div class="frame"><img loading="lazy" src="/api/jobs/${job}/review/pieces/${p.id}.png?t=${Date.now()}" alt="piece ${p.id}">
       ${p.seams.map(sm => `<span class="seam-hit" style="left:${sm.x * 100}%" title="Cut this join" data-left="${sm.left}" data-right="${sm.right}"></span>`).join("")}</div>
-      <div class="cap">${p.strips} strips${p.mostly_from ? ` · mostly ${p.mostly_from}` : ""}</div></div>`).join("");
+      <div class="cap">${p.strips} strips${p.mostly_from ? ` · mostly ${p.mostly_from}` : ""}</div></div>`).join("")
+    + (all.length > limit ? `<div class="piece more-pieces"><button class="ghost">Show ${Math.min(40, all.length - limit)} more (${all.length - limit} smaller pieces)</button></div>` : "");
   zoomable(el);
+  const more = el.querySelector(".more-pieces button");
+  if (more) more.onclick = () => cutGrid(el, pieces, limit + 40);
   el.querySelectorAll(".seam-hit").forEach(h => h.onclick = async e => {
     e.stopPropagation();
     if (await cut(Number(h.dataset.left), Number(h.dataset.right))) await finish();
