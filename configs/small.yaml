@@ -1,0 +1,13 @@
+# Quick experiments: small low-resolution pages, classic pixel compatibility.
+# (The cnn compatibility expects ~300 dpi input like the defaults / real scans.)
+output_dir: runs/small
+generate:
+  width: 600
+  height: 800
+  font_size: [13, 22]
+  margin: [30, 70]
+  paragraphs: [3, 7]
+shred:
+  num_strips: 20
+reconstruct:
+  compat: classic

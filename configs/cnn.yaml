@@ -1,0 +1,17 @@
+# Paixão et al. 2020 style: learned seam compatibility + global TSP, 300 dpi synthetic pages.
+output_dir: runs/cnn
+generate:
+  num_docs: 5
+shred:
+  num_strips: 30
+  vertical_jitter: 5
+  edge_damage: 2
+  noise: 0.03
+reconstruct:
+  compat: cnn
+  solver: tsp
+  model_path: models/compat.pt
+train:
+  num_docs: 400
+  epochs: 10
+  model_path: models/compat.pt

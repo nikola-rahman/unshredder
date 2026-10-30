@@ -1,0 +1,28 @@
+# SeamNet: contrastive edge bi-encoder + global TSP. See src/unshredder/seamnet.py.
+output_dir: runs/seamnet
+wandb_project: unshredder
+reconstruct:
+  compat: seamnet
+  solver: tsp
+  model_path: models/seamnet.pt
+  max_shift: 12
+seamnet:
+  model_path: models/seamnet.pt
+  steps: 20000
+  pages_per_batch: 4
+  crop_rows: 1024
+  # Real intact pages for the simulator. bus/legal are excluded because S-ISRI-OCR (D2)
+  # was printed from them; cdip/ holds the originals of S-CDIP (D3) and is never used.
+  page_dirs: [/root/data/pages_synth, datasets/isri-ocr/rep.3B]
+  synth_weight: 0.0
+  page_weight: 3.0
+  shred_weight: 1.0
+  augment: 0.5
+  # Fixed document splits of the real shredded sets, identical for every run so that
+  # val/top1_pooled is comparable across runs.   val | train | test
+  #   D1 (60 docs): 0:15 | 15:45 | 45:60    D2 (20): 0:5 | 5:15 | 15:20    D3 (100): 0:25 | 25:75 | 75:100
+  # bus/legal ISRI pages are excluded (D2 was printed from them); cdip/ holds D3's originals.
+  shred_dirs: ["datasets/D1[15:45]", "datasets/D2[5:15]", "datasets/D3[25:75]"]
+  val_dirs: ["datasets/D1[0:15]", "datasets/D2[0:5]", "datasets/D3[0:25]"]
+  val_docs: 1000
+  workers: 24

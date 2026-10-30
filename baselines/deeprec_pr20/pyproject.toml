@@ -1,0 +1,18 @@
+[project]
+name = "deeprec-pr20-baseline"
+version = "0.1.0"
+description = "PyTorch port of Paixão et al. 2020 (deeprec-pr20) for baseline evaluation"
+requires-python = ">=3.12"
+dependencies = [
+    "unshredder",  # shared data loading, TSP solver and metrics, so scores are comparable
+    "numpy",
+    "scipy",
+    "scikit-image",
+    "torch",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+unshredder = { path = "../..", editable = true }

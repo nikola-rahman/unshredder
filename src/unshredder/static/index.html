@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unshredder</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --card: #fcfcfb; --ink: #0b0b0b; --ink2: #52514e; --muted: #898781; --line: #e2e1dc;
+    --accent: #2a78d6; --accent-soft: #e5effb; --good: #1e8e3e; --bad: #c62828; --shadow: 0 1px 2px rgba(0,0,0,.06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121211; --card: #1a1a19; --ink: #f0efec; --ink2: #c3c2b7; --muted: #898781; --line: #33332f;
+            --accent: #5b9cf0; --accent-soft: #1d2a3b; --good: #4caf50; --bad: #ef5350; --shadow: none; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+  main { max-width: 1240px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { font-size: 22px; margin: 0 0 2px; letter-spacing: -.01em; }
+  h2 { font-size: 17px; margin: 0 0 6px; }
+  .sub { color: var(--ink2); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; box-shadow: var(--shadow); }
+  label { display: block; font-weight: 600; margin: 12px 0 4px; }
+  .hint { color: var(--muted); font-weight: 400; font-size: 13px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; }
+  .row > div { flex: 1 1 200px; }
+  input[type=number], select { width: 100%; padding: 8px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink); font: inherit; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 28px; text-align: center; cursor: pointer; color: var(--ink2); transition: border-color .15s, color .15s; }
+  .drop.over { border-color: var(--accent); color: var(--accent); }
+  button { font: inherit; font-weight: 600; padding: 9px 16px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; }
+  button.ghost { background: transparent; border-color: var(--line); color: var(--ink); }
+  button:disabled { opacity: .45; cursor: default; }
+  kbd { font: 12px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; color: var(--ink2); background: var(--bg); }
+  .status { font-weight: 600; }
+  .error { color: var(--bad); white-space: pre-wrap; }
+  .metrics { display: flex; gap: 12px; flex-wrap: wrap; }
+  .metric { flex: 1 1 150px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .metric b { display: block; font-size: 24px; letter-spacing: -.01em; }
+  .metric span { color: var(--ink2); font-size: 13px; }
+  .pile { width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+  .pile img { height: 200px; display: block; }
+  .pieces { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+  .piece { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #fff; }
+  .piece img { width: 100%; display: block; cursor: zoom-in; }
+  .piece .frame { position: relative; }
+  .seam-hit { position: absolute; top: 0; bottom: 0; width: 14px; margin-left: -7px; cursor: pointer; }
+  .seam-hit::after { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 2px; background: transparent; }
+  .seam-hit:hover::after { background: var(--bad); }
+  .seam-hit:hover::before { content: "✂"; position: absolute; top: 4px; left: -2px; color: var(--bad); font-size: 16px; background: #fff; border-radius: 4px; }
+  .piece .cap { padding: 6px 8px; font-size: 13px; color: #333; background: #fafaf8; border-top: 1px solid #eee; }
+  .bad-text { color: var(--bad); }
+  dialog { max-width: 95vw; max-height: 95vh; padding: 0; border: 0; border-radius: 10px; }
+  dialog img { max-width: 95vw; max-height: 90vh; display: block; }
+
+  /* review */
+  .review-head { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; justify-content: space-between; }
+  .bar { height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; margin: 10px 0 6px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .35s ease; }
+  .stats { display: flex; gap: 18px; flex-wrap: wrap; color: var(--ink2); font-size: 13px; }
+  .stats b { color: var(--ink); font-weight: 600; }
+  .ask { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 14px 0 8px; }
+  .keys { color: var(--muted); font-size: 13px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .cands { height: 68vh; overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+  .cands-row { display: flex; gap: 14px; padding: 14px; width: max-content; min-width: 100%; }
+  .cand { flex: none; border: 2px solid transparent; border-radius: 10px; background: var(--card); cursor: pointer; transition: border-color .12s, transform .12s; box-shadow: var(--shadow); }
+  .cand:hover, .cand:focus-visible { border-color: var(--accent); outline: none; }
+  .cand.picked { border-color: var(--accent); background: var(--accent-soft); }
+  .cand header { position: sticky; top: 0; display: flex; justify-content: space-between; align-items: center; gap: 10px;
+                 padding: 8px 10px; background: var(--card); border-bottom: 1px solid var(--line); border-radius: 8px 8px 0 0; z-index: 1; }
+  .cand header .n { font-weight: 700; }
+  .cand header .p { color: var(--ink2); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .cand img { display: block; min-height: 300px; min-width: 120px; background: repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 12px); }
+  .cand.end header .n { color: var(--ink2); }
+  .focusbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 12px 0 0; padding: 10px 12px; border-radius: 10px; background: var(--accent-soft); }
+  .focusbar b { font-weight: 700; }
+  .plist { display: flex; flex-direction: column; gap: 8px; max-height: 70vh; overflow: auto; }
+  .pc { display: flex; align-items: center; gap: 14px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--card); cursor: pointer; }
+  .pc:hover { border-color: var(--accent); }
+  .pc.fin { border-color: var(--good); border-width: 2px; }
+  .pc.fin .meta b { color: var(--good); }
+  .ph { font-size: 15px; margin: 8px 0 4px; }
+  .ptabs { display: flex; gap: 6px; margin: 0 0 10px; }
+  .tab { background: transparent; border: 1px solid var(--line); color: var(--ink2); }
+  .tab span { font-weight: 400; }
+  .tab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tab[data-tab="fin"].on { background: var(--good); border-color: var(--good); }
+  .findet { margin-top: 10px; }
+  .findet summary { cursor: pointer; }
+  .findet .pc { margin-top: 8px; }
+  .pc .th { flex: 1 1 auto; overflow: hidden; }
+  .pc .th img { height: 130px; display: block; background: #fff; }
+  .pc .meta { flex: none; width: 230px; font-size: 13px; color: var(--ink2); }
+  .pc .meta b { display: block; font-size: 16px; color: var(--ink); }
+  .meter { height: 6px; border-radius: 3px; background: var(--line); margin: 6px 0; overflow: hidden; }
+  .meter i { display: block; height: 100%; background: var(--accent); }
+  .viewer { overflow: auto; max-height: 82vh; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+  .viewer .frame { position: relative; width: max-content; }
+  .viewer img { display: block; }
+  .viewer .seam-hit { width: 16px; margin-left: -8px; }
+  .viewer .mine { position: absolute; top: 0; height: 6px; width: 4px; margin-left: -2px; background: var(--accent); }
+  .answers { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow: auto; }
+  .ans { display: flex; align-items: center; gap: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; background: var(--card); }
+  .ans img { height: 120px; display: block; border-radius: 4px; background: #fff; }
+  .ans .what { flex: 1; font-size: 14px; }
+  .join { display: flex; align-items: stretch; overflow: hidden; padding: 0 6px; }
+  .labels { display: flex; font-size: 13px; font-weight: 700; height: 20px; position: relative; }
+  .labels span { position: absolute; white-space: nowrap; }
+  .sc { display: flex; flex-direction: column; flex: none; position: relative; }
+  .sc .bar { height: 14px; margin: 2px 1px; border-radius: 2px; color: #fff; font-size: 10px; line-height: 14px; text-align: center; overflow: hidden; }
+  .sc .win { overflow: hidden; position: relative; }
+  .sc .win img { display: block; cursor: ns-resize; touch-action: none; user-select: none; -webkit-user-drag: none; min-height: 0; min-width: 0; background: #fff; }
+  .sc.anchor .win::after { content: ""; position: absolute; inset: 0; background: rgba(42,120,214,.12); pointer-events: none; }
+  .sc.cand-strip .win::after { content: ""; position: absolute; inset: 0; background: rgba(222,120,20,.14); pointer-events: none; }
+  .sc.picked-strip .win { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .sc.edge .win { background: repeating-linear-gradient(135deg, #e2e1dc 0 6px, #ecebe6 6px 12px); }
+  .join img { display: block; min-height: 0; min-width: 0; background: none; user-select: none; -webkit-user-drag: none; }
+  .join .r { cursor: ns-resize; touch-action: none; will-change: transform; }
+  .cand .choose { padding: 3px 10px; font-size: 13px; }
+  .cand { cursor: default; }
+  .cand.sel { border-color: var(--accent); }
+  .cand header .off { color: var(--accent); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); opacity: 0; background: var(--ink); color: var(--bg);
+           padding: 10px 16px; border-radius: 10px; font-weight: 600; transition: opacity .2s, transform .2s; pointer-events: none; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .done { text-align: center; padding: 40px 10px; }
+  .done b { font-size: 20px; display: block; margin-bottom: 6px; }
+  [hidden] { display: none !important; }
+
+  /* steps */
+  .steps { display: flex; gap: 8px; margin: 0 0 18px; flex-wrap: wrap; }
+  .step { flex: 1 1 150px; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line);
+          border-radius: 10px; background: var(--card); color: var(--muted); font-weight: 600; }
+  .step i { font-style: normal; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+            border: 2px solid var(--line); font-size: 13px; flex: none; }
+  .step.active { color: var(--ink); border-color: var(--accent); }
+  .step.active i { border-color: var(--accent); color: var(--accent); }
+  .step.done { color: var(--ink2); }
+  .step.done i { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .big { font-size: 16px; padding: 11px 22px; }
+  .scans { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; }
+  .scans figure { margin: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
+  .scans img { width: 100%; display: block; cursor: zoom-in; }
+  .scans figcaption { font-size: 12px; color: #444; padding: 4px 6px; border-top: 1px solid #eee; background: #fafaf8;
+                      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line); border-top-color: var(--accent);
+          border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; margin-right: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<main>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+    <h1>Unshredder</h1>
+    <a href="/" class="ghost" style="text-decoration:none;font-weight:600;padding:7px 14px;border:1px solid var(--line);border-radius:8px;color:var(--ink)">＋ New job</a>
+  </div>
+  <p class="sub">Scan pages, shred them with the strip-cut simulator, and reconstruct them, then review the uncertain seams. Processing runs on the GPU server; nothing is stored on this machine.</p>
+
+  <nav class="steps" id="steps">
+    <div class="step" data-step="scan"><i>1</i>Scan</div>
+    <div class="step" data-step="shred"><i>2</i>Shred</div>
+    <div class="step" data-step="unshred"><i>3</i>Unshred</div>
+    <div class="step" data-step="review"><i>4</i>Review</div>
+  </nav>
+
+  <section id="setup" class="card">
+    <h2>1 · Scan</h2>
+    <label>What do you have?</label>
+    <select id="mode">
+      <option value="scan">Intact documents (PDFs or page images): scan, shred and reconstruct them, checked against the originals</option>
+      <option value="strips">Already-shredded strips, scanned one image per strip: reconstruct them</option>
+    </select>
+    <label>Files <span class="hint" id="fileHint">— PDFs or page images; every page goes into one pile</span></label>
+    <div class="drop" id="drop" tabindex="0">Drop files here or click to choose<br><span id="picked" class="hint"></span></div>
+    <input type="file" id="files" multiple hidden accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp">
+    <div class="actions"><button class="primary big" id="go" disabled>Scan</button></div>
+  </section>
+
+  <section class="card" id="statusCard" hidden>
+    <div class="status" id="status"></div>
+    <div class="error" id="error"></div>
+  </section>
+
+  <section class="card" id="scanCard" hidden>
+    <h2>2 · Shred</h2>
+    <p class="hint" id="scanInfo" style="margin:0"></p>
+    <div class="scans" id="scans"></div>
+    <div class="row">
+      <div><label>Strips per page <span class="hint">— A4 strip-cut: 6 mm ≈ 35, 4 mm ≈ 52</span></label><input type="number" id="strips" value="35" min="2" max="80"></div>
+      <div><label>Damage <span class="hint" id="damageVal">0.5</span> <span class="hint">— slanted cuts, frayed edges, curl, scan noise</span></label><input type="range" id="damage" min="0" max="1.5" step="0.1" value="0.5"></div>
+      <div><label>Shuffle seed</label><input type="number" id="seed" value="0"></div>
+    </div>
+    <div class="actions"><button class="primary big" id="shredBtn">Shred</button></div>
+  </section>
+
+  <section class="card" id="pileCard" hidden>
+    <h2>3 · Unshred</h2>
+    <p class="hint" id="pileInfo" style="margin:0 0 8px"></p>
+    <div class="pile"><img id="pile" alt="shuffled strips"></div>
+    <div class="actions"><button class="primary big" id="unshredBtn">Unshred</button>
+      <button class="ghost" id="reshredBtn">← Shred again with other settings</button></div>
+  </section>
+
+  <section class="card" id="resultCard" hidden>
+    <div class="review-head">
+      <h2>Automatic reconstruction</h2>
+      <div class="actions" style="margin:0"><button class="ghost" id="backToPile">← Pile</button>
+      <button class="primary" id="startReview">4 · Review uncertain seams →</button></div>
+    </div>
+    <div class="metrics" id="metrics" style="margin-top:10px"></div>
+    <label>Reconstructed pieces <span class="hint">— red marks are seams the model is unsure about</span></label>
+    <div class="pieces" id="pieces"></div>
+  </section>
+
+  <section class="card" id="reviewCard" hidden>
+    <div class="review-head">
+      <h2>Review</h2>
+      <div class="actions" style="margin:0">
+        <label style="margin:0;font-weight:400" class="hint">Context
+          <select id="ctx" style="width:auto;padding:5px 8px;margin-left:4px">
+            <option value="3">3 strips per side</option><option value="6" selected>6 strips per side</option><option value="10">10 strips per side</option>
+          </select></label>
+        <button class="ghost" id="piecesBtn" title="Pick a piece and finish it">▦ Pieces</button>
+        <button class="ghost" id="undoBtn" title="Undo (U)">Undo <kbd>U</kbd></button>
+        <button class="primary" id="finishBtn">Finish</button>
+      </div>
+    </div>
+    <div class="bar"><i id="barFill"></i></div>
+    <div class="stats" id="stats"></div>
+
+    <div id="focusBar" class="focusbar" hidden></div>
+    <div id="piecesPanel" hidden>
+      <p class="hint" style="margin:10px 0 6px">Largest pieces first. Width only says how much of a page the piece would cover if its joins are right; check the joins and the weakest one. Click a piece to work only on its two open ends.</p>
+      <div class="ptabs" id="ptabs"></div>
+      <div class="plist" id="plist"></div>
+    </div>
+    <div id="question">
+      <div class="ask">
+        <div><b id="askText">Which strip continues the <span style="color:#2a78d6">blue “THIS STRIP”</span>?</b> <span class="hint">Each picture puts one <span style="color:#de7814">orange candidate</span> right of it. Read the text across the join; scroll to check every line. If none fits, press M or E. Drag any strip up/down to check alignment (or click a strip and use ↑/↓; double-click resets it). Clicking never answers: use “Choose ✓” or the number keys.</span></div>
+        <div class="keys"><span><kbd>1</kbd>–<kbd>9</kbd> pick</span><span><kbd>E</kbd> page ends here</span><span><kbd>M</kbd> more</span><span><kbd>S</kbd> not sure</span><span><kbd>X</kbd> cut wrong join</span><span><kbd>U</kbd> undo</span></div>
+      </div>
+      <div class="cands" id="cands"><div class="cands-row" id="candsRow"></div></div>
+      <div class="actions">
+        <button class="ghost" id="prevBtn">◂ Previous candidates</button>
+        <button class="ghost" id="moreBtn">Next candidates <kbd>M</kbd></button>
+        <span class="hint" id="pageInfo" style="align-self:center"></span>
+        <button class="ghost" id="laterBtn" title="Nothing is joined; this question comes back at the end">Not sure — ask me later <kbd>S</kbd></button>
+        <button class="ghost" id="endBtn">Page ends here / no neighbour <kbd>E</kbd></button>
+        <button class="ghost" id="cutBtn" title="The grey strip joined left of THIS STRIP does not belong there">✂ Cut the join left of THIS STRIP <kbd>X</kbd></button>
+      </div>
+    </div>
+    <details id="answersBox" style="margin-top:16px">
+      <summary style="cursor:pointer;font-weight:600">Your answers <span class="hint" id="answersCount"></span></summary>
+      <p class="hint" style="margin:6px 0">Newest first. Remove any answer you are not sure about; that seam is asked again.</p>
+      <div class="answers" id="answers"></div>
+    </details>
+    <div class="done" id="allDone" hidden>
+      <b>Every seam is decided.</b>
+      <span class="hint">Finish to see the reviewed pages.</span>
+    </div>
+  </section>
+
+  <section class="card" id="viewerCard" hidden>
+    <div class="review-head">
+      <h2>Whole piece <span class="hint" id="viewerInfo"></span></h2>
+      <div class="actions" style="margin:0">
+        <label class="hint" style="margin:0;font-weight:400">Size <select id="viewerH" style="width:auto;padding:5px 8px">
+          <option value="900">small</option><option value="1400" selected>reading</option><option value="2200">large</option></select></label>
+        <button class="primary" id="viewerBack">← Back to the review</button>
+      </div>
+    </div>
+    <p class="hint" style="margin:6px 0">Read the whole piece. Hover over a join and click ✂ to cut it if it reads wrong (joins you made are marked blue at the top).</p>
+    <div class="viewer"><div class="frame" id="viewerFrame"></div></div>
+  </section>
+
+  <section class="card" id="finalCard" hidden>
+    <div class="review-head">
+      <h2>Reviewed reconstruction <span class="hint">— hover a join and click ✂ to cut a wrong one, then go back to the review</span></h2>
+      <button class="ghost" id="backToReview">← Back to review</button>
+    </div>
+    <div class="metrics" id="finalMetrics" style="margin:10px 0"></div>
+    <div class="pieces" id="finalPieces"></div>
+  </section>
+</main>
+<dialog id="zoom"><img id="zoomImg" alt=""></dialog>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const show = (id, on = true) => { $(id).hidden = !on; };
+let chosen = [], job = null, current = null, k = 5, busy = false, focus = -1, offset = 0;
+const PAGE = 8;
+const PREVIEW_H = 1800;
+
+// ---------- steps
+const ORDER = ["scan", "shred", "unshred", "review"];
+function setStep(name) {
+  const i = ORDER.indexOf(name);
+  document.querySelectorAll(".step").forEach(el => {
+    const j = ORDER.indexOf(el.dataset.step);
+    el.classList.toggle("active", j === i); el.classList.toggle("done", j < i);
+  });
+}
+const CARDS = ["setup", "scanCard", "pileCard", "resultCard", "reviewCard", "finalCard", "viewerCard"];  // the upload box only on a new job
+const only = (...ids) => CARDS.forEach(c => show(c, ids.includes(c)));
+setStep("scan");
+
+// ---------- 1 scan
+$("mode").onchange = () => {
+  const pages = $("mode").value === "scan";
+  $("go").textContent = pages ? "Scan" : "Unshred";
+  $("fileHint").textContent = pages ? "— PDFs or page images; every page goes into one pile" : "— one image per scanned strip, any order";
+};
+$("damage").oninput = () => $("damageVal").textContent = $("damage").value;
+const pick = files => {
+  chosen = [...files];
+  $("picked").textContent = chosen.length ? `${chosen.length} file(s): ${chosen.slice(0, 4).map(f => f.name).join(", ")}${chosen.length > 4 ? ", …" : ""}` : "";
+  $("go").disabled = !chosen.length;
+};
+$("drop").onclick = () => $("files").click();
+$("drop").onkeydown = e => { if (e.key === "Enter" || e.key === " ") $("files").click(); };
+$("files").onchange = e => pick(e.target.files);
+$("drop").ondragover = e => { e.preventDefault(); $("drop").classList.add("over"); };
+$("drop").ondragleave = () => $("drop").classList.remove("over");
+$("drop").ondrop = e => { e.preventDefault(); $("drop").classList.remove("over"); pick(e.dataTransfer.files); };
+
+const pct = v => `${Math.round(v * 100)}%`;
+// model confidence: never shown as certain; one decimal near the ends
+const conf = v => v >= 0.999 ? "≥99.9%" : v < 0.001 ? "<0.1%" : (v > 0.99 || v < 0.01) ? `${(v * 100).toFixed(1)}%` : `${Math.round(v * 100)}%`;
+const toast = msg => { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 1600); };
+async function api(path, opts = {}) {
+  const r = await fetch(`/api/jobs/${path}`, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  return j;
+}
+const form = obj => { const f = new FormData(); Object.entries(obj).forEach(([k, v]) => f.append(k, v)); return f; };
+
+// wait for the job to leave queued/running; show the current step with a spinner
+async function poll(id) {
+  show("statusCard"); $("error").textContent = "";
+  while (true) {
+    const s = await api(id);
+    $("status").innerHTML = `<span class="spin"></span>${s.step}…`;
+    if (s.state === "failed") { show("statusCard"); $("status").textContent = ""; throw new Error(s.error || "job failed"); }
+    if (!["queued", "running"].includes(s.state)) { show("statusCard", false); return s; }
+    await new Promise(res => setTimeout(res, 1000));
+  }
+}
+const fail = e => { show("statusCard"); $("status").textContent = ""; $("error").textContent = String(e.message || e); };
+const lock = (on) => ["go", "shredBtn", "unshredBtn", "reshredBtn", "startReview"].forEach(b => $(b).disabled = on);
+
+function metricCells(m, extra) {
+  const cells = [];
+  if (m) cells.push(["Page recovery", pct(m.page_recovery), "largest intact piece per page"], ["Seams correct", pct(m.seam_recovery)], ["Pages 100% complete", pct(m.pages_complete)]);
+  return cells.concat(extra).map(([k, v, h]) => `<div class="metric"><b>${v}</b><span>${k}${h ? " — " + h : ""}</span></div>`).join("");
+}
+function zoomable(root) { root.querySelectorAll("img").forEach(img => img.onclick = () => { $("zoomImg").src = img.dataset.full || img.src; $("zoom").showModal(); }); }
+function pieceGrid(el, pieces, url) {
+  el.innerHTML = [...pieces].sort((a, b) => b.strips - a.strips).map(p => `
+    <div class="piece"><img loading="lazy" src="${url(p.id)}" alt="piece ${p.id}">
+      <div class="cap">${p.strips} strips${p.mostly_from ? ` · mostly ${p.mostly_from}` : ""}${p.review_seams ? ` · <span class="bad-text">${p.review_seams} unsure</span>` : ""}</div></div>`).join("");
+  zoomable(el);
+}
+
+function showScans(s) {
+  const pages = s.scan.pages;
+  $("scanInfo").textContent = `${pages.length} page(s) scanned at ${s.scan.dpi} dpi. Choose the shredder settings.`;
+  $("scans").innerHTML = pages.map(p => `<figure><img loading="lazy" src="/api/jobs/${job}/scans/${p.id}.png" data-full="/api/jobs/${job}/scans/${p.id}.png?full=true" alt="${p.name}"><figcaption title="${p.name}">${p.name}</figcaption></figure>`).join("");
+  zoomable($("scans"));
+  only("scanCard"); setStep("shred");
+}
+function showPile(s) {
+  const n = s.shred.strips;
+  $("pileInfo").textContent = s.shred.pages_in ? `${s.shred.pages_in} page(s) → ${n} strips, shuffled into one pile (first 120 shown, as the model receives them).` : `${n} strips in the pile.`;
+  $("pile").src = `/api/jobs/${job}/pile.png?t=${Date.now()}`;
+  show("reshredBtn", !!s.scan);
+  only("pileCard"); setStep("unshred");
+}
+function showResult(res) {
+  $("metrics").innerHTML = metricCells(res.metrics, [["Strips", res.strips + (res.blank_strips ? ` (${res.blank_strips} blank)` : "")], ["Pieces", res.pieces.length + (res.pages_in ? ` from ${res.pages_in} pages` : "")], ["Time", `${res.seconds}s`]]);
+  pieceGrid($("pieces"), res.pieces, id => `/api/jobs/${job}/pieces/${id}.png?t=${Date.now()}`);
+  only("resultCard"); setStep("review");
+}
+
+$("go").onclick = async () => {
+  lock(true); only(); setStep("scan");
+  show("statusCard"); $("error").textContent = ""; $("status").innerHTML = `<span class="spin"></span>Uploading ${chosen.length} file(s)…`;
+  try {
+    const fd = new FormData();
+    chosen.forEach(f => fd.append("files", f, f.name));
+    fd.append("mode", $("mode").value);
+    const r = await fetch("/api/jobs", { method: "POST", body: fd });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    job = j.job; history.replaceState(null, "", `#${job}`);
+    const s = await poll(job);
+    if (s.state === "scanned") showScans(s); else showResult(s.result);
+  } catch (e) { fail(e); show("setup"); }
+  finally { lock(false); $("go").disabled = !chosen.length; }
+};
+$("shredBtn").onclick = async () => {
+  lock(true);
+  try {
+    await api(`${job}/shred`, { method: "POST", body: form({ strips_per_page: $("strips").value, damage: $("damage").value, seed: $("seed").value }) });
+    showPile(await poll(job));
+  } catch (e) { fail(e); } finally { lock(false); }
+};
+$("unshredBtn").onclick = async () => {
+  lock(true);
+  try {
+    await api(`${job}/unshred`, { method: "POST" });
+    showResult((await poll(job)).result);
+  } catch (e) { fail(e); } finally { lock(false); }
+};
+$("reshredBtn").onclick = () => { only("scanCard"); setStep("shred"); };
+$("backToPile").onclick = () => { only("pileCard"); setStep("unshred"); };
+$("zoom").onclick = () => $("zoom").close();
+
+// a reload (or the link) brings the job back at the step it reached
+(async () => {
+  const id = location.hash.slice(1);
+  if (!/^[0-9a-f]{6,}$/.test(id)) return;
+  try {
+    job = id;
+    let s = await api(id);
+    if (["queued", "running"].includes(s.state)) s = await poll(id);
+    if (s.state === "done" && s.result) { showResult(s.result); toast("Job restored"); }
+    else if (s.state === "shredded" && s.shred) { showPile(s); toast("Job restored"); }
+    else if (s.state === "scanned" && s.scan) { showScans(s); toast("Job restored"); }
+  } catch (e) { job = null; history.replaceState(null, "", location.pathname); }
+})();
+
+// ---------- review
+function renderState(s) {
+  const prevQ = current && current.question ? `${current.question.anchor}/${current.question.side}` : null;
+  current = s;
+  const nowQ = s.question ? `${s.question.anchor}/${s.question.side}` : null;
+  if (nowQ !== prevQ && !(s.question && s.question.offset)) { offset = 0; k = 5; }
+  const p = s.progress;
+  $("barFill").style.width = pct(p.decided / Math.max(1, p.strips));
+  const t = s.test ? `<span>Your answers correct: <b>${s.test.correct}/${s.test.answered}</b></span>` : "";
+  $("stats").innerHTML = `<span><b>${p.decided}</b> of ${p.strips} seams decided</span><span>Your decisions: <b>${p.your_decisions}</b></span>${s.later ? `<span>Saved for later: <b>${s.later}</b></span>` : ""}
+    <span>Joined automatically: <b>${p.auto_links}</b></span><span>Questions left: <b>${p.open}</b></span><span>Pieces: <b>${p.pieces}</b></span>${t}`;
+  $("undoBtn").disabled = p.your_decisions === 0;
+  renderAnswers(s.answers || []);
+  $("cutBtn").disabled = !(s.question && s.question.side === "right" && s.question.joined_left !== null && s.question.joined_left !== undefined);
+  renderFocus(s);
+  if (!s.question) { show("question", false); show("allDone", !s.focus); return; }
+  show("question"); show("allDone", false);
+  const a = s.question.anchor;
+  if (s.question.again) toast("Asked again: you saved this one for later");
+  const leftQ = s.question.side === "left";
+  const EDGE = leftQ ? "start" : "end";
+  const opts = s.question.options.filter(o => o.id !== EDGE);
+  const endOpt = s.question.options.find(o => o.id === EDGE);
+  $("askText").innerHTML = leftQ ? `Which strip comes <u>before</u> the <span style="color:#2a78d6">blue “THIS STRIP”</span> (to its left)?`
+                                 : `Which strip continues the <span style="color:#2a78d6">blue “THIS STRIP”</span>?`;
+  $("endBtn").innerHTML = leftQ ? `Page starts here / nothing to the left <kbd>E</kbd>` : `Page ends here / no neighbour <kbd>E</kbd>`;
+  const ctx = Number($("ctx").value);
+  const H = PREVIEW_H;
+  const joinView = (a, o) => {
+    const col = (id, cls, color, num) => `<div class="sc ${cls}" data-strip="${id}">
+        <div class="bar" style="background:${color}">${num}</div>
+        <div class="win"><img draggable="false" src="/api/jobs/${job}/review/strip/${id}.png?h=${H}" style="height:${H}px" alt=""></div>
+        <div class="bar" style="background:${color}">${num}</div></div>`;
+    const edge = cls => `<div class="sc edge ${cls}"><div class="bar" style="background:#de7814"></div><div class="win" style="width:70px;height:${H}px"></div><div class="bar" style="background:#de7814"></div></div>`;
+    const grey = k => k % 2 ? "#9a988f" : "#c3c1ba";
+    const isEdge = o.id === EDGE;
+    // left group ends at the join (its last column gets "jl"); right group starts at it
+    let leftCols, rightCols, labL, labR;
+    if (!leftQ) {
+      const left = s.question.left.slice(-ctx), right = isEdge ? [] : o.right.slice(0, ctx);
+      leftCols = left.map((id, i) => { const k = left.length - 1 - i; return k === 0 ? col(id, "anchor jl", "#2a78d6", "") : col(id, "", grey(k), `-${k}`); });
+      rightCols = isEdge ? [edge("")] : right.map((id, i) => col(id, i === 0 ? "cand-strip" : "", i === 0 ? "#de7814" : grey(i), i === 0 ? "" : `+${i}`));
+      labL = ["THIS STRIP", "#2a78d6"]; labR = [isEdge ? "PAGE END" : "CANDIDATE", "#de7814"];
+    } else {
+      const left = isEdge ? [] : o.left.slice(-ctx), right = s.question.right.slice(0, ctx);
+      leftCols = isEdge ? [edge("jl")] : left.map((id, i) => { const k = left.length - 1 - i; return k === 0 ? col(id, "cand-strip jl", "#de7814", "") : col(id, "", grey(k), `-${k}`); });
+      rightCols = right.map((id, i) => i === 0 ? col(id, "anchor", "#2a78d6", "") : col(id, "", grey(i), `+${i}`));
+      labL = [isEdge ? "PAGE START" : "CANDIDATE", "#de7814"]; labR = ["THIS STRIP", "#2a78d6"];
+    }
+    return `<div class="labels"><span class="lab-l" style="color:${labL[1]}">${labL[0]}</span><span class="lab-r" style="color:${labR[1]}">${labR[0]}</span></div>
+      <div class="join">${leftCols.concat(rightCols).join("")}</div>`;
+  };
+  const src = (a, c, part) => `/api/jobs/${job}/review/preview.png?anchor=${a}&cand=${c}&h=${PREVIEW_H}&ctx=${$("ctx").value}&part=${part}`;
+  const card = (o, i) => `
+    <div class="cand ${o.id === EDGE ? "end" : ""}" tabindex="0" data-choice="${o.id}">
+      <header><span class="n">${o.id === EDGE ? (leftQ ? "E · Page starts here" : "E · Page ends here") : (i < 9 ? String(i + 1) : "") + ((s.question.offset || 0) ? ` <span class="hint">· #${(s.question.offset || 0) + i + 1}</span>` : "")}</span><button class="ghost reset" type="button" title="Put every strip back" style="padding:3px 8px;font-size:12px">Reset</button><button class="primary choose" type="button">Choose ✓</button><span class="p" title="model's own confidence; not calibrated on these documents">${conf(o.p)} model confidence</span></header>
+      ${joinView(a, o)}
+    </div>`;
+  const qo = s.question.offset || 0, qt = s.question.total || opts.length;
+  $("pageInfo").textContent = qt ? `candidates ${qo + 1}–${Math.min(qt, qo + opts.length)} of ${qt} (every strip that could still fit)` : "no free strips left";
+  $("prevBtn").disabled = qo === 0; $("moreBtn").disabled = qo + opts.length >= qt;
+  $("candsRow").innerHTML = opts.map(card).join("") + (endOpt ? card(endOpt) : card({ id: EDGE, p: 0 }));
+  $("candsRow").querySelectorAll(".cand").forEach(el => {
+    let sel = null;
+    const dy = new Map();
+    const setDy = (sc, v) => { v = Math.max(-400, Math.min(400, Math.round(v))); dy.set(sc, v); sc.querySelector("img").style.transform = `translateY(${v}px)`;
+                               sc.querySelector(".bar").title = v ? `moved ${v > 0 ? "+" : ""}${v}px` : ""; };
+    const select = sc => { el.querySelectorAll(".sc").forEach(x => x.classList.toggle("picked-strip", x === sc)); sel = sc;
+                           $("candsRow").querySelectorAll(".cand").forEach(c => c.classList.toggle("sel", c === el)); el.focus({ preventScroll: true }); };
+    el.querySelectorAll(".sc:not(.edge)").forEach(sc => {
+      const img = sc.querySelector("img");
+      img.onpointerdown = e => {
+        e.preventDefault(); e.stopPropagation(); img.setPointerCapture(e.pointerId); select(sc);
+        const y0 = e.clientY, d0 = dy.get(sc) || 0;
+        img.onpointermove = ev => setDy(sc, d0 + ev.clientY - y0);
+        img.onpointerup = () => { img.onpointermove = img.onpointerup = null; };
+      };
+      img.ondblclick = e => { e.stopPropagation(); setDy(sc, 0); };
+    });
+    // labels sit over the join: THIS STRIP ends at it, CANDIDATE starts at it
+    requestAnimationFrame(() => {
+      const jl = el.querySelector(".sc.jl"), join = el.querySelector(".join");
+      if (!jl) return;
+      const x = jl.offsetLeft + jl.offsetWidth - join.offsetLeft + 6;
+      const l = el.querySelector(".lab-l"), r = el.querySelector(".lab-r");
+      l.style.left = `${Math.max(0, x - l.offsetWidth - 4)}px`; r.style.left = `${x + 4}px`;
+    });
+    el.querySelector(".reset").onclick = e => { e.stopPropagation(); el.querySelectorAll(".sc:not(.edge)").forEach(sc => setDy(sc, 0)); };
+    // a click only selects (for the arrow keys); answering takes the button, a number key or Enter
+    el.onclick = () => select(sel || el.querySelector(".sc.cand-strip") || el.querySelector(".sc.anchor"));
+    el.querySelector(".choose").onclick = e => { e.stopPropagation(); answer(el.dataset.choice); };
+    el.onkeydown = e => {
+      if (e.key === "Enter") answer(el.dataset.choice);
+      else if ((e.key === "ArrowUp" || e.key === "ArrowDown") && sel) { e.preventDefault(); e.stopPropagation(); setDy(sel, (dy.get(sel) || 0) + (e.key === "ArrowUp" ? -1 : 1) * (e.shiftKey ? 10 : 1)); }
+    };
+  });
+  $("cands").scrollTo({ top: 0, left: 0 });
+}
+
+async function startReview() {
+  only("reviewCard"); setStep("review");
+  $("stats").textContent = "Preparing review…";
+  k = 5;
+  try { renderState(await api(`${job}/review/start`, { method: "POST", body: form({ auto_threshold: 0.9999 }) })); }
+  catch (e) { $("stats").innerHTML = `<span class="bad-text">${e.message}</span>`; }
+}
+$("startReview").onclick = startReview;
+
+async function answer(choice) {
+  if (busy || !current || !current.question) return;
+  busy = true;
+  const el = $("candsRow").querySelector(`[data-choice="${choice}"]`);
+  if (el) el.classList.add("picked");
+  try {
+    const s = await api(`${job}/review/answer`, { method: "POST", body: form({ anchor: current.question.anchor, choice, side: current.question.side, focus }) });
+    k = 5;
+    const auto = s.last.auto_added ? ` · +${s.last.auto_added} joined automatically` : "";
+    const check = s.last.correct === undefined ? "" : (s.last.correct ? " ✓" : " ✗ (not the original neighbour)");
+    toast((choice === "end" ? "Marked page end" : choice === "start" ? "Marked page start" : "Joined") + auto + check);
+    renderState(s);
+  } catch (e) { toast(e.message); }
+  finally { busy = false; }
+}
+async function more(dir = 1) {
+  if (!current || !current.question) return;
+  const q = current.question;
+  offset = dir > 0 ? (offset === 0 ? k : offset + PAGE) : Math.max(0, offset - PAGE);
+  if (offset >= q.total) { offset = Math.max(0, q.total - PAGE); }
+  k = offset === 0 ? 5 : PAGE;
+  renderState(await api(`${job}/review/state?k=${k}&focus=${focus}&offset=${offset}`));
+}
+async function undo() {
+  if (busy) return;
+  busy = true;
+  try { k = 5; renderState(await api(`${job}/review/undo`, { method: "POST", body: form({ focus }) })); toast("Undone"); }
+  catch (e) { toast(e.message); } finally { busy = false; }
+}
+$("moreBtn").onclick = () => more(1);
+$("prevBtn").onclick = () => more(-1);
+try { const c = localStorage.getItem("ctx"); if (c) $("ctx").value = c; } catch (e) {}
+$("ctx").onchange = () => { try { localStorage.setItem("ctx", $("ctx").value); } catch (e) {} if (current) renderState(current); };
+$("endBtn").onclick = () => answer(current && current.question && current.question.side === "left" ? "start" : "end");
+$("undoBtn").onclick = undo;
+function renderFocus(s) {
+  const f = s.focus;
+  if (!f) { show("focusBar", false); return; }
+  show("focusBar");
+  const done = f.done ? (f.unsure_ends ? ` · <span class="bad-text">${f.unsure_ends} end(s) left unsure</span>` : " · <b>both page edges reached ✓</b>") : "";
+  $("focusBar").innerHTML = `<span>Working on one piece: <b>${f.strips} strips</b>, spans ~${pct(f.width_share)} of a page width${done}</span>
+    <button class="primary" id="viewPieceBtn">View whole piece</button>
+    <button class="ghost" id="nextPieceBtn">${f.done ? "Pick the next piece" : "▦ Other pieces"}</button>
+    <button class="ghost" id="leaveFocusBtn">Leave focus (all questions)</button>`;
+  $("nextPieceBtn").onclick = openPieces;
+  $("viewPieceBtn").onclick = () => viewPiece(f.strip);
+  $("leaveFocusBtn").onclick = async () => { focus = -1; show("piecesPanel", false); renderState(await api(`${job}/review/state?k=5`)); };
+  // a finished piece is shown once for a read-through; the key changes if the piece changes (e.g. a cut)
+  const key = `${f.strip}:${f.strips}`;
+  if (f.done && !shownDone.has(key)) { shownDone.add(key); toast("This piece is finished: read it through"); viewPiece(f.strip); }
+}
+let viewing = null, pieceTab = "todo";
+const shownDone = new Set();
+async function viewPiece(strip) {
+  viewing = strip;
+  const info = await api(`${job}/review/piece?strip=${strip}`);
+  const h = Number($("viewerH").value);
+  $("viewerInfo").textContent = `— ${info.strips} strips, spans ~${pct(info.width_share)} of a page width · ${info.left_closed ? "left edge ✓" : "left open"} · ${info.right_closed ? "right edge ✓" : "right open"}`;
+  $("viewerFrame").innerHTML = `<img src="/api/jobs/${job}/review/piece_thumb.png?first=${info.first}&h=${h}&v=${info.strips}-${Date.now()}" style="height:${h}px" alt="whole piece">` +
+    info.seams.map(sm => `${sm.by_you ? `<span class="mine" style="left:${sm.x * 100}%"></span>` : ""}<span class="seam-hit" style="left:${sm.x * 100}%" title="Cut this join" data-left="${sm.left}" data-right="${sm.right}"></span>`).join("");
+  $("viewerFrame").querySelectorAll(".seam-hit").forEach(hh => hh.onclick = async e => {
+    e.stopPropagation();
+    if (await cut(Number(hh.dataset.left), Number(hh.dataset.right))) viewPiece(strip);
+  });
+  only("viewerCard");
+}
+$("viewerH").onchange = () => viewing !== null && viewPiece(viewing);
+$("viewerBack").onclick = async () => {
+  only("reviewCard");
+  const s = await api(`${job}/review/state?k=5&focus=${focus}`);
+  renderState(s);
+  if (s.focus && s.focus.done) openPieces();  // finished: go on to the next piece
+};
+async function openPieces() {
+  show("piecesPanel"); show("question", false); show("allDone", false);
+  $("plist").innerHTML = `<span class="hint">Loading pieces…</span>`;
+  const r = await api(`${job}/review/pieces`);
+  const row = p => `
+    <div class="pc ${p.finished ? "fin" : ""}" data-first="${p.first}">
+      <button class="ghost viewbtn" data-first="${p.first}" style="flex:none">View</button>
+      <div class="th"><img loading="lazy" src="/api/jobs/${job}/review/piece_thumb.png?first=${p.first}&h=260&v=${p.strips}" alt=""></div>
+      <div class="meta"><b>${p.finished ? "✓ " : ""}${p.strips} strips</b>spans ~${pct(p.width_share)} of a page width<div class="meter"><i style="width:${pct(p.width_share)}"></i></div>
+        ${p.joins ? `joins: ${p.joins_by_you} by you, ${p.joins - p.joins_by_you} automatic<br>weakest join: ${conf(p.weakest_join)}<br>` : ""}
+        ${p.joins_correct !== undefined && p.joins ? (p.joins_correct === p.joins ? `<span style="color:var(--good)">joins correct: ${p.joins_correct}/${p.joins}</span><br>` : `<span class="bad-text">joins correct: ${p.joins_correct}/${p.joins} — contains a wrong join</span><br>`) : ""}
+        ${p.left_closed ? "left edge ✓" : "left open"} · ${p.right_closed ? "right edge ✓" : "right open"}</div>
+    </div>`;
+  const todo = r.pieces.filter(p => !p.finished), fin = r.pieces.filter(p => p.finished);
+  $("ptabs").innerHTML = `<button class="tab ${pieceTab === "todo" ? "on" : ""}" data-tab="todo">To do <span>(${r.todo_total})</span></button>
+    <button class="tab ${pieceTab === "fin" ? "on" : ""}" data-tab="fin">✓ Finished <span>(${r.finished_total})</span></button>`;
+  $("ptabs").querySelectorAll(".tab").forEach(b => b.onclick = () => { pieceTab = b.dataset.tab; openPieces(); });
+  $("plist").innerHTML = pieceTab === "fin"
+    ? (fin.length ? fin.map(row).join("") : `<p class="hint">No finished pieces yet. A piece is finished when both its left and right page edges are marked.</p>`)
+    : todo.map(row).join("") + (r.todo_total > todo.length ? `<p class="hint">${r.todo_total - todo.length} smaller pieces not shown.</p>` : "");
+  $("plist").querySelectorAll(".viewbtn").forEach(b => b.onclick = e => { e.stopPropagation(); viewPiece(Number(b.dataset.first)); });
+  $("plist").querySelectorAll(".pc").forEach(el => el.onclick = async () => {
+    focus = Number(el.dataset.first); k = 5;
+    show("piecesPanel", false);
+    renderState(await api(`${job}/review/state?k=5&focus=${focus}`));
+  });
+}
+$("piecesBtn").onclick = () => $("piecesPanel").hidden ? openPieces() : (show("piecesPanel", false), current && renderState(current));
+function renderAnswers(list) {
+  $("answersCount").textContent = `(${list.length})`;
+  const label = x => x.kind === "reject" ? `✂ Cut the join ${x.a} | ${x.b}` : x.kind === "start" ? `Page starts at strip ${x.a}` : x.b === "end" ? `Page ends after strip ${x.a}` : `Joined strip ${x.a} → ${x.b}`;
+  const check = x => x.correct === undefined ? "" : x.correct ? ` <span style="color:var(--good)">✓</span>` : ` <span class="bad-text">✗ wrong</span>`;
+  $("answers").innerHTML = [...list].reverse().map(x => `
+    <div class="ans">${x.kind === "link" ? `<img loading="lazy" src="/api/jobs/${job}/review/preview.png?anchor=${x.a}&cand=${x.b}&h=400&ctx=3" alt="">` : ""}
+      <div class="what">${label(x)}${check(x)}</div>
+      <button class="ghost" data-i="${x.i}">Remove</button></div>`).join("");
+  $("answers").querySelectorAll("button").forEach(b => b.onclick = async () => {
+    if (busy) return;
+    busy = true;
+    try { k = 5; renderState(await api(`${job}/review/remove`, { method: "POST", body: form({ i: b.dataset.i, focus }) })); toast("Answer removed; that seam will be asked again"); }
+    catch (e) { toast(e.message); } finally { busy = false; }
+  });
+}
+async function later() {
+  if (busy || !current || !current.question) return;
+  busy = true;
+  try { k = 5; renderState(await api(`${job}/review/later`, { method: "POST", body: form({ anchor: current.question.anchor, side: current.question.side, focus }) })); toast("Saved for later — nothing joined"); }
+  catch (e) { toast(e.message); } finally { busy = false; }
+}
+$("laterBtn").onclick = later;
+async function cut(left, right) {
+  if (busy) return null;
+  busy = true;
+  try {
+    const s = await api(`${job}/review/cut`, { method: "POST", body: form({ left, right, focus }) });
+    const check = s.last.correct === undefined ? "" : (s.last.correct ? " ✓ (it was wrong)" : " ✗ (that join was right)");
+    toast("Join cut" + check);
+    return s;
+  } catch (e) { toast(e.message); return null; } finally { busy = false; }
+}
+$("cutBtn").onclick = async () => {
+  const q = current && current.question;
+  if (!q || q.joined_left === null || q.joined_left === undefined) return;
+  const s = await cut(q.joined_left, q.anchor);
+  if (s) { k = 5; renderState(s); }
+};
+
+function cutGrid(el, pieces) {
+  el.innerHTML = [...pieces].sort((a, b) => b.strips - a.strips).map(p => `
+    <div class="piece"><div class="frame"><img loading="lazy" src="/api/jobs/${job}/review/pieces/${p.id}.png?t=${Date.now()}" alt="piece ${p.id}">
+      ${p.seams.map(sm => `<span class="seam-hit" style="left:${sm.x * 100}%" title="Cut this join" data-left="${sm.left}" data-right="${sm.right}"></span>`).join("")}</div>
+      <div class="cap">${p.strips} strips${p.mostly_from ? ` · mostly ${p.mostly_from}` : ""}</div></div>`).join("");
+  zoomable(el);
+  el.querySelectorAll(".seam-hit").forEach(h => h.onclick = async e => {
+    e.stopPropagation();
+    if (await cut(Number(h.dataset.left), Number(h.dataset.right))) await finish();
+  });
+}
+async function finish() {
+  const r = await api(`${job}/review/finish`, { method: "POST" });
+  $("finalMetrics").innerHTML = metricCells(r.metrics, [["Pieces", r.pieces.length], ["Your decisions", r.progress.your_decisions], ["Joined automatically", r.progress.auto_links]]);
+  cutGrid($("finalPieces"), r.pieces);
+  show("reviewCard", false); show("finalCard");
+}
+$("finishBtn").onclick = finish;
+$("backToReview").onclick = async () => { show("finalCard", false); show("reviewCard"); renderState(await api(`${job}/review/state?focus=${focus}`)); };
+
+document.addEventListener("keydown", e => {
+  if ($("reviewCard").hidden || e.metaKey || e.ctrlKey || e.altKey || e.target.tagName === "INPUT") return;
+  const key = e.key.toLowerCase();
+  if (/^[1-9]$/.test(key)) {
+    const c = $("candsRow").querySelectorAll(".cand:not(.end)")[Number(key) - 1];
+    if (c) { e.preventDefault(); answer(c.dataset.choice); }
+  } else if (key === "e") { e.preventDefault(); $("endBtn").click(); }
+  else if (key === "m") { e.preventDefault(); more(e.shiftKey ? -1 : 1); }
+  else if (key === "u") { e.preventDefault(); undo(); }
+  else if (key === "x") { e.preventDefault(); $("cutBtn").click(); }
+  else if (key === "s") { e.preventDefault(); later(); }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,34 @@
+# Open questions / to revisit
+
+## Low-information strips and "same document?" across a gap (raised 2026-10-30, parked)
+Strips with almost no ink (margins, blank space between paragraphs) cannot be placed exactly
+from their edges — by the model or by a person. Their exact order rarely matters for reading,
+but whether the pieces on either side belong to the *same page/document* does.
+
+Current handling: reviewer presses S ("not sure — ask me later"); if still unsure at the end the
+pieces stay separate (a missing join is preferable to a wrong one for evidence).
+
+Ideas, not decided:
+- Line guides in the review: horizontal lines at THIS STRIP's text baselines across the whole
+  view, to check that the line grid continues across a blank gap.
+- A third answer "same page, exact position unsure": joins pieces into one page but marks the
+  gap as uncertain (visible marker; recorded as uncertain in exports, not as a confirmed join).
+- Model: page-identity evidence beyond the seam (line grid, margins, header/footer bands, font,
+  toner, paper tone, cut width/slant) to score "same page" between pieces.
+
+## Scaling to hundreds of thousands of strips (planned 2026-10-30)
+Measured on the 36-document job (7,644 inked strips, A6000): embedding 19.4 s (linear, ~2.5 ms/strip),
+all-pairs scoring 6.2 s (quadratic), 13 GB GPU. Extrapolated to 100k strips at once: ~4 min
+embedding, ~18 min pairs, ~85 GB of edge embeddings (fp32) -> does not fit.
+
+Workflow (user): batch by batch of strips — a batch is any set of strips, NOT a bag; strips of one page can arrive in
+different batches. Unplaced strips/open ends stay in a pool indefinitely; more batches are added later.
+
+1. Sparse scoring (in progress): blockwise, bf16, keep top-K (~50) candidates per edge in both
+   directions + exact running log-sum-exp per row/column so confidences are unchanged; multi-GPU
+   by blocks. Review engine works from the candidate lists, never a dense n x n matrix.
+2. Persistent pool: each strip's edges embedded once and stored; a new batch is embedded and scored
+   only against the pool's OPEN edges (a joined piece exposes only its 2 outer edges; finished
+   pages leave the pool). Cost per batch ~ new strips x open edges; pieces can grow across batches.
+3. If needed: coarse pre-filter (compact edge descriptor + ANN retrieval of ~200) before the full
+   model; validate recall@K of the true neighbour first.

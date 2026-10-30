@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.pytest_cache/
+.DS_Store
+
+# Data, models and run outputs live on the GPU servers / S3, never in git
+/runs/
+/models/
+/datasets
+/data/
+/wandb/
+/logs/
+*.pt
+*.npz
+
+# Local material: test documents and recordings
+serbian_pdfs/
+*.mov
+*.mp4
