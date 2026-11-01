@@ -1,7 +1,7 @@
 [project]
 name = "unshredder"
 version = "0.1.0"
-description = "Add your description here"
+description = "Reconstruct strip-shredded documents with a learned seam model and a human review app"
 readme = "README.md"
 authors = [
     { name = "Nikola Rahman", email = "nikola.rahman.89@gmail.com" }
