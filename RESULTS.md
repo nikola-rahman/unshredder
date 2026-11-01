@@ -132,3 +132,22 @@ result (97.02% vs 97.22%). PR 2020 ran in its original TF 1.11 code on D1/D2 (99
 on one A6000, against ~25 pairs/s for the original code). Speed: PR 2020 evaluates its network on every pair of strips
 (×21 vertical shifts), ours and CVPR 2020 embed each edge once.
 Result files: S3 `unshredder/cmp/2026-11-01/`.
+
+## Serbian Cyrillic PDF collection (FinePDFs srp_Cyrl → Common Crawl), 2026-11-01
+
+One Hetzner cx23 (2 vCPU, Helsinki), signed S3 reads of `s3://commoncrawl` with a read-only key (not billed),
+ramp-up throttle capped at 200 req/s, ~61 records/s overall, ~4.5 h including one crash and resume.
+
+| | count |
+|---|---|
+| FinePDFs srp_Cyrl records | 944,855 |
+| **PDFs stored (unique, complete)** | **739,910 (253.3 GB, 943 shards)** |
+| cut off by Common Crawl (WARC-Truncated) | 167,772 (17.8%; the largest files, see TODO second pass) |
+| not a PDF / incomplete | 11,376 / 4,435 |
+| exact duplicates skipped | 22,062 (incl. 743 refetched after the crash) |
+| evaluation documents excluded (sha256 list) | 43 hits on the 36 evaluation PDFs |
+
+Index: `s3://unshredder/unshredder/collect/finepdfs/srp_Cyrl/index.sqlite`, one row per PDF with its
+shard key and byte offset (one ranged GET per PDF). Shard 230 was overwritten after a resume (state.json
+lagged an uploaded shard); `repair_shard.py` found 743 mismatching rows and refetched all 743 into shard 942.
+Final check: 320/320 sampled PDFs (300 random + 20 from shards 230/942) match their SHA-256.

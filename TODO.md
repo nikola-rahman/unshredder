@@ -75,3 +75,13 @@ Treat assembly as sequential decisions (which join to commit next, or which ques
 reviewer next) and learn a policy, e.g. SD2RL (AAAI 2023), deep MCTS (Alphazzle, 2023). Reward:
 correct pages for fewest reviewer decisions. Likely only practical inside a piece / small candidate
 set, not over the whole pile.
+
+### Second pass: PDFs that Common Crawl cut off (raised 2026-11-01)
+~17% of srp_Cyrl FinePDFs records are WARC-Truncated: the crawler stopped at its size limit, so the
+lost ones are the largest PDFs (often multi-page reports / official documents). This biases the
+collected set toward short documents.
+To do: (1) record skipped records in a `skipped` table of the index (id, url, reason, WARC-Truncated
+length) so a second pass needs no re-scan and the size limit / lost sizes can be measured;
+(2) second pass fetching the truncated ones from their original URLs (FinePDFs `url`), respecting
+robots.txt, rate-limited per host, stored separately and flagged as live-fetched with the date;
+(3) a small test on a sample first to see how many URLs are still online.

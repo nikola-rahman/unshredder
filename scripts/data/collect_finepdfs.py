@@ -44,15 +44,18 @@ log = logging.getLogger("collect")
 
 
 class Throttle:
-    """Shared request budget for all fetch threads, following Common Crawl's guidance (slow down when you
-    see errors, retry at most about once per second): a token bucket at `rate` requests/s; a 403/429/503
-    pauses every thread with growing backoff and halves the rate, which then recovers slowly on success."""
+    """Shared request budget for all fetch threads, following AWS S3 guidance (start at a low request rate,
+    increase it exponentially, back off on 503 SlowDown) and Common Crawl's (slow down when you see errors):
+    a token bucket that starts at `start` requests/s and grows ~1% per successful request up to `max_rate`;
+    a 403/429/503 pauses every thread with growing backoff and halves the rate."""
 
-    def __init__(self, rate: float):
-        self.max_rate = self.rate = rate
+    def __init__(self, max_rate: float, start: float = 5.0):
+        self.max_rate = max_rate
+        self.rate = min(start, max_rate)
         self.lock = threading.Lock()
         self.next_at = 0.0  # earliest time the next request may start
         self.backoff = 0.0
+        self.logged = self.rate
 
     def acquire(self) -> None:
         with self.lock:
@@ -65,14 +68,18 @@ class Throttle:
         with self.lock:
             self.backoff = min(600.0, max(2.0, self.backoff * 2))
             self.rate = max(0.25, self.rate / 2)
+            self.logged = self.rate
             self.next_at = max(self.next_at, time.monotonic() + self.backoff)
-            log.warning("Common Crawl answered %d: pausing all fetches %.0f s, rate now %.2f req/s",
+            log.warning("Common Crawl answered %d: pausing all fetches %.0f s, rate now %.1f req/s",
                         status, self.backoff, self.rate)
 
     def reward(self) -> None:
         with self.lock:
             self.backoff = max(0.0, self.backoff / 2 - 1) if self.backoff else 0.0
-            self.rate = min(self.max_rate, self.rate + 0.01)
+            self.rate = min(self.max_rate, self.rate * 1.01)  # exponential ramp-up
+            if self.rate >= 2 * self.logged or (self.rate == self.max_rate and self.logged < self.max_rate):
+                self.logged = self.rate
+                log.info("request rate up to %.1f req/s (cap %.0f)", self.rate, self.max_rate)
 
 
 THROTTLE = Throttle(4.0)  # replaced in main() from --rate
@@ -223,9 +230,10 @@ class Shard:
         self.bytes += len(data)
 
     def close(self) -> bytes:
-        self.add("manifest.jsonl", "".join(json.dumps(m) + "\n" for m in self.manifest).encode(), {})
-        self.manifest.pop()
-        self.tar.close()
+        if not self.tar.closed:  # idempotent: the exit path may flush a shard that a failed flush already closed
+            self.add("manifest.jsonl", "".join(json.dumps(m) + "\n" for m in self.manifest).encode(), {})
+            self.manifest.pop()
+            self.tar.close()
         return self.buf.getvalue()
 
 
@@ -258,7 +266,8 @@ def parse_args() -> argparse.Namespace:
                     default="s3" if os.environ.get("AWS_ACCESS_KEY_ID") else "https",
                     help="s3: signed reads of s3://commoncrawl (AWS reader key in env); https: data.commoncrawl.org")
     ap.add_argument("--threads", type=int, help="concurrent fetches (default 32 for s3, 8 for https)")
-    ap.add_argument("--rate", type=float, help="max requests per second per worker (default 50 for s3, 4 for https)")
+    ap.add_argument("--rate", type=float, help="max requests per second (default 200 for s3: polite ceiling on Common "
+                                               "Crawl's shared bucket; 4 for https). The rate ramps up from 5/s to it")
     ap.add_argument("--shard-mb", type=int, default=256)
     ap.add_argument("--max-records", type=int, help="only the first N records of the config (tests)")
     ap.add_argument("--log", default="collect.log", help="log file (the live progress bar is terminal-only)")
@@ -270,7 +279,7 @@ def main(a: argparse.Namespace) -> None:
     global THROTTLE, SOURCE
     SOURCE = a.source
     a.threads = a.threads or (32 if a.source == "s3" else 8)
-    a.rate = a.rate or (50.0 if a.source == "s3" else 4.0)
+    a.rate = a.rate or (200.0 if a.source == "s3" else 4.0)
     THROTTLE = Throttle(a.rate)
     log.info("fetching from %s: %d threads, at most %.0f requests/s", a.source, a.threads, a.rate)
     import boto3
@@ -279,7 +288,9 @@ def main(a: argparse.Namespace) -> None:
 
     s3 = boto3.client("s3", endpoint_url=a.endpoint, region_name=a.region,
                       aws_access_key_id=os.environ["S3_ACCESS_KEY"], aws_secret_access_key=os.environ["S3_SECRET_KEY"],
-                      config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
+                      config=Config(signature_version="s3v4", s3={"addressing_style": "path"},
+                                    retries={"mode": "adaptive", "max_attempts": 10},
+                                    connect_timeout=30, read_timeout=120))
     transfer = TransferConfig(multipart_chunksize=32 << 20, max_concurrency=8)  # parallel multipart shard uploads
     prefix = f"{a.prefix}/{a.config}/w{a.worker:03d}of{a.workers:03d}"
     try:
@@ -296,6 +307,9 @@ def main(a: argparse.Namespace) -> None:
     with sqlite3.connect(index_path) as conn:
         conn.executescript(INDEX_SCHEMA)
         known = {r[0] for r in conn.execute("SELECT sha256 FROM pdfs")}
+        last = conn.execute("SELECT MAX(shard_key) FROM pdfs").fetchone()[0]
+    if last:  # a shard can be uploaded and indexed while its state.json failed: never reuse its number
+        state["shard"] = max(state["shard"], int(last.rsplit("-", 1)[1].split(".")[0]) + 1)
 
     records = list_records(a.config, a.max_records, s3, a.bucket, f"{a.prefix}/{a.config}/records.parquet")
     base = state["next"]
@@ -322,14 +336,27 @@ def main(a: argparse.Namespace) -> None:
 
         rows = list(shard.manifest)
 
-        def upload():  # order: shard, then index, then state, so state never points past indexed data
+        def upload_once():  # order: shard, then index, then state, so state never points past indexed data
             if body is not None:
                 s3.upload_fileobj(io.BytesIO(body), a.bucket, key, Config=transfer)
             with sqlite3.connect(index_path) as conn:
-                index_rows(conn, rows, a.worker)
+                index_rows(conn, rows, a.worker)  # INSERT OR REPLACE: safe to repeat
                 conn.execute("INSERT OR REPLACE INTO meta VALUES ('state', ?)", (snapshot.decode(),))
             s3.upload_file(str(index_path), a.bucket, index_key)
             s3.put_object(Bucket=a.bucket, Key=f"{prefix}/state.json", Body=snapshot)
+
+        def upload():  # storage hiccups pause the run instead of ending it
+            since, wait_s = time.monotonic(), 5.0
+            while True:
+                try:
+                    return upload_once()
+                except Exception as e:  # timeouts / 5xx from our own S3
+                    if time.monotonic() - since > 1800:
+                        raise
+                    log.warning("upload of %s failed (%s: %s); retrying in %.0f s", key or "state",
+                                type(e).__name__, str(e)[:120], wait_s)
+                    time.sleep(wait_s)
+                    wait_s = min(120.0, wait_s * 2)
 
         pending = uploader.submit(upload)
         if wait:
@@ -359,7 +386,8 @@ def main(a: argparse.Namespace) -> None:
 
     from tqdm import tqdm
 
-    bar = tqdm(total=len(mine), unit="rec", dynamic_ncols=True, mininterval=1, smoothing=0.05)
+    # whole-run position (matches the log lines), also after a resume
+    bar = tqdm(total=base + len(mine), initial=base, unit="rec", dynamic_ncols=True, mininterval=1, smoothing=0.05)
     done = 0  # records fully handled, in order; what state.json may advance to
     try:
         for k, (rec, data, why, sha, pages) in enumerate(results()):
@@ -374,7 +402,8 @@ def main(a: argparse.Namespace) -> None:
             counts[why] = counts.get(why, 0) + 1
             bar.update(1)
             if k % 20 == 0:
-                bar.set_postfix(ok=counts.get("ok", 0), failed=k + 1 - counts.get("ok", 0), shard=state["shard"], refresh=False)
+                bar.set_postfix(ok=counts.get("ok", 0), skipped=sum(counts.values()) - counts.get("ok", 0),
+                                shard=state["shard"], refresh=False)
             if shard.bytes >= a.shard_mb << 20:
                 flush(base + k + 1)
             if time.time() - last_log > 30:
