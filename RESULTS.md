@@ -121,7 +121,9 @@ Run 2 is clearly better on D3 and vs CVPR 2020 on D1, tied with PR 2020 on D1, a
 (5 documents; the gap is one page, D018, 13/26 joins vs 25–26 for both baselines).
 
 Caveat: run 2 trained on *other* documents of D1–D3 (same shredders and scanners); Paixão's models never saw
-real shreds from these datasets.
+real shreds from these datasets. Run 2 saw 30 D1, 10 D2 and 50 D3 training documents, so its clearest win (D3)
+is also where this home advantage is largest; the two cannot be separated without leave-one-dataset-out
+retraining.
 
 Baselines were run from the authors' released code and weights. PR 2020 uses their CDIP model on D1/D2 and their
 ISRI model on D3, as in their paper. Checks: CVPR 2020 (original TF code, CPU) reproduces its published full-D2 pile
