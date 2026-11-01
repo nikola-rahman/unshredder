@@ -44,7 +44,9 @@ print(min(ok)[1])" "$loc")}
   wait
   servers | while read -r name ip; do
     w=${name##*-}
-    until ssh "${ssh_opts[@]}" "root@$ip" true 2>/dev/null; do sleep 5; done
+    [ -n "$ip" ] || { echo "no IP for $name" >&2; continue; }
+    for t in $(seq 60); do ssh "${ssh_opts[@]}" "root@$ip" true 2>/dev/null && break; sleep 5; done
+    ssh "${ssh_opts[@]}" "root@$ip" true 2>/dev/null || { echo "$name: no SSH after 5 min" >&2; continue; }
     ssh "${ssh_opts[@]}" "root@$ip" "S3_ACCESS_KEY='$S3_ACCESS_KEY' S3_SECRET_KEY='$S3_SECRET_KEY' bash -s" <<EOF &
 set -e
 export DEBIAN_FRONTEND=noninteractive
