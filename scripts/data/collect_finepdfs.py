@@ -13,8 +13,8 @@ resumes after its last uploaded shard.
   S3_ACCESS_KEY=... S3_SECRET_KEY=... python scripts/data/collect_finepdfs.py \
       --config srp_Cyrl --worker 0 --workers 8 --prefix unshredder/collect/finepdfs
 
-Every PDF is untrusted crawl data: it is never written outside the shard, and it is opened only
-in a separate process with a time limit to check its page count.
+Every PDF is untrusted crawl data: it is stored as bytes only and never opened here; page counts and
+broken or encrypted files are dealt with when rendering opens them (in isolated worker processes).
 """
 
 from __future__ import annotations
@@ -33,7 +33,6 @@ import time
 import zlib
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from multiprocessing import get_context
 from pathlib import Path
 
 CC = "https://data.commoncrawl.org/"
@@ -205,14 +204,6 @@ def fetch_pdf(rec: dict) -> tuple[bytes | None, str]:
     return payload, "ok"
 
 
-def _pages(data: bytes) -> int:
-    import pymupdf
-
-    pymupdf.TOOLS.mupdf_display_errors(False)
-    with pymupdf.open(stream=data, filetype="pdf") as doc:
-        return -1 if doc.needs_pass else doc.page_count
-
-
 class Shard:
     def __init__(self, prefix: str, index: int):
         self.key = f"{prefix}/shard-{index:05d}.tar"
@@ -269,7 +260,6 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--threads", type=int, help="concurrent fetches (default 32 for s3, 8 for https)")
     ap.add_argument("--rate", type=float, help="max requests per second per worker (default 50 for s3, 4 for https)")
     ap.add_argument("--shard-mb", type=int, default=256)
-    ap.add_argument("--max-pages", type=int, default=500)
     ap.add_argument("--max-records", type=int, help="only the first N records of the config (tests)")
     ap.add_argument("--log", default="collect.log", help="log file (the live progress bar is terminal-only)")
     ap.add_argument("--exclude-sha256", help="file with one sha256 per line to skip (evaluation documents)")
@@ -317,7 +307,6 @@ def main(a: argparse.Namespace) -> None:
     shard = Shard(prefix, state["shard"])
     seen: set[str] = known  # duplicates are skipped across restarts too
     t0, last_log = time.time(), 0.0
-    pool = get_context("spawn").Pool(max(1, os.cpu_count() or 1), maxtasksperchild=50)
 
     uploader = ThreadPoolExecutor(1)  # uploads run beside fetching; at most one shard in flight
     pending = None
@@ -348,19 +337,14 @@ def main(a: argparse.Namespace) -> None:
         shard = Shard(prefix, state["shard"])
 
     def work(rec: dict):
-        """Fetch, hash and page-check one record (runs in a fetch thread, so checks run in parallel)."""
+        """Fetch and hash one record (runs in a fetch thread)."""
         data, why = fetch_pdf(rec)
         if data is None:
             return rec, None, why, None, 0
         sha = hashlib.sha256(data).hexdigest()
         if sha in exclude:
             return rec, None, "excluded", sha, 0
-        try:
-            pages = pool.apply_async(_pages, (data,)).get(timeout=30)
-        except Exception:  # noqa: BLE001 - hostile or broken PDF, or a hung parser
-            pages = 0
-        why = "ok" if 0 < pages <= a.max_pages else ("encrypted" if pages < 0 else "bad_pages")
-        return rec, data if why == "ok" else None, why, sha, pages
+        return rec, data, "ok", sha, None  # opening/page counts happen at rendering time
 
     def results():
         """Sliding window: keep 4 x threads records in flight, yield results in record order."""
@@ -403,7 +387,6 @@ def main(a: argparse.Namespace) -> None:
         bar.close()
         flush(base + done, wait=True)
         uploader.shutdown()
-        pool.terminate()
     log.info("DONE worker %d: %s", a.worker, json.dumps(counts))
 
 
