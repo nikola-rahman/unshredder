@@ -6,8 +6,8 @@
 #   scripts/data/hetzner_collect.sh attach <config> <worker>                    # watch a worker live (tmux)
 #   scripts/data/hetzner_collect.sh down <config>                               # delete the servers
 #
-# Each worker runs inside a tmux session named "collect" and prints a progress line every 30 s
-# (also logged to /root/collect.log). Detach from an attached session with Ctrl-b d.
+# Each worker runs inside a tmux session named "collect": a live progress bar on the terminal, and
+# timestamped log lines (incl. a progress summary every 30 s) in /root/collect.log. Detach with Ctrl-b d.
 # Needs: hcloud with an active context, an SSH key at ~/.ssh/id_ed25519.pub, and S3_ACCESS_KEY /
 # S3_SECRET_KEY in the environment. The S3 keys are passed to each worker over SSH only; they are
 # never written to Hetzner metadata (cloud-init) or to disk on the servers.
@@ -51,9 +51,9 @@ export PATH="\$HOME/.local/bin:\$PATH"
 cd unshredder && git pull -q
 tmux kill-session -t collect 2>/dev/null || true
 tmux new-session -d -s collect -e S3_ACCESS_KEY="\$S3_ACCESS_KEY" -e S3_SECRET_KEY="\$S3_SECRET_KEY" \
-  "cd /root/unshredder && uv run --no-project --with pyarrow --with huggingface_hub --with boto3 --with pymupdf --with requests \
+  "cd /root/unshredder && uv run --no-project --with pyarrow --with huggingface_hub --with duckdb --with boto3 --with pymupdf --with requests --with tqdm \
    python scripts/data/collect_finepdfs.py --config $config --worker $w --workers $n --prefix $prefix \
-   --exclude-sha256 configs/finepdfs_eval_exclude.sha256 ${EXTRA_ARGS:-} 2>&1 | tee /root/collect.log; echo FINISHED; sleep infinity"
+   --exclude-sha256 configs/finepdfs_eval_exclude.sha256 --log /root/collect.log ${EXTRA_ARGS:-}; echo FINISHED; sleep infinity"
 echo "started worker $w on $name (tmux session: collect)"
 EOF
   done
@@ -61,7 +61,7 @@ EOF
   ;;
 status)
   servers | while read -r name ip; do
-    echo "$name: $(ssh "${ssh_opts[@]}" "root@$ip" "grep -E '^(progress|DONE|listed|worker)|Error|Traceback' /root/collect.log | tail -1" 2>&1)"
+    echo "$name: $(ssh "${ssh_opts[@]}" "root@$ip" "grep -E ' (progress|DONE|listed|worker) |ERROR|Traceback' /root/collect.log | tail -1" 2>&1)"
   done
   ;;
 attach)
