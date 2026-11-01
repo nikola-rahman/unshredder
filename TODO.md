@@ -41,3 +41,24 @@ baselines, descenders/ascenders incl. Cyrillic ц щ д); (2) keep both orientat
 (near-blank) strips — reconstruct.py/link_by_confidence already support n_orient; (3) "rotate 180"
 button in the review; (4) random flips in the simulator so metrics cover it.
 Related: face-down strips (back of page; double-sided documents), mixed shredders (different widths).
+
+## Backlog
+
+### Drop no-information strips from training and evaluation (raised 2026-11-01)
+Completely white strips (margins, blank pages, blank space) carry no seam evidence, yet they are
+still sampled as training pairs, which teaches noise. Some evaluation metrics already skip them
+(Paixão accuracy, page_recovery_inked, "inked" counts in the app), but not all do.
+To do: one shared ink test (e.g. dark-pixel fraction in the 48 px edge band, threshold set on
+real scans so scanner noise/paper texture doesn't count as ink), applied per seam not just per
+strip (a strip can have text on one edge only); exclude blank-blank seams from contrastive
+training pairs (keep blank strips as negatives/null-edge examples only if that helps); exclude
+them from every eval metric and the reviewer simulation; report how many were dropped.
+
+### Cross-cut shredding (raised 2026-11-01)
+Cross-cut / confetti shredders cut strips again horizontally into small rectangular particles
+(DIN 66399 P-3..P-5; micro-cut P-6/P-7 is far smaller). Each piece has 4 edges, so matching becomes
+2-D (left/right AND top/bottom), and pieces are tiny (often a few characters).
+To do: shredder simulator for cross-cut (particle sizes per DIN level, cut angle/jitter, torn
+corners); SeamNet variant scoring horizontal seams too (shared encoder, rotated bands); 2-D
+assembly (grid placement instead of chains) and a review UI for 2-D pieces; find real cross-cut
+datasets for evaluation; measure per DIN level what is still recoverable.
