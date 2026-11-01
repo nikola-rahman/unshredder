@@ -26,18 +26,29 @@ import json
 import os
 import random
 import tarfile
+import threading
 import time
-import urllib.error
-import urllib.request
 import zlib
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import get_context
 from pathlib import Path
 
 CC = "https://data.commoncrawl.org/"
 COLUMNS = ["id", "url", "file_path", "offset", "is_truncated"]
-CHUNK = 1 << 18  # 256 KB per read while streaming a WARC record
-MAX_RECORD = 64 << 20  # give up on records larger than this
+FIRST_RANGE = 1 << 20  # most records fit in the first 1 MB request; larger ones continue in growing ranges
+MAX_RECORD = 64 << 20  # give up on records larger than this (compressed)
+_local = threading.local()
+
+
+def _session():
+    """One keep-alive HTTP session per thread: no TLS handshake per record."""
+    if not hasattr(_local, "s"):
+        import requests
+
+        _local.s = requests.Session()
+        _local.s.headers["User-Agent"] = "unshredder-collector/1.0"
+    return _local.s
 
 
 def list_records(config: str, max_records: int | None) -> list[dict]:
@@ -58,33 +69,40 @@ def list_records(config: str, max_records: int | None) -> list[dict]:
     return rows[:max_records] if max_records else rows
 
 
-def fetch_pdf(rec: dict, retries: int = 6) -> tuple[bytes | None, str]:
-    """Stream one gzip-compressed WARC record and return its PDF payload, or None and a reason."""
-    off = int(rec["offset"])
-    req = urllib.request.Request(CC + rec["file_path"], headers={
-        "Range": f"bytes={off}-{off + MAX_RECORD - 1}", "User-Agent": "unshredder-collector/1.0"})
+def _get_range(url: str, start: int, end: int, retries: int = 6) -> bytes | None:
     for attempt in range(retries):
         try:
-            dec = zlib.decompressobj(16 + zlib.MAX_WBITS)  # one gzip member = one WARC record
-            out = io.BytesIO()
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                while not dec.eof:
-                    chunk = resp.read(CHUNK)
-                    if not chunk:
-                        break
-                    out.write(dec.decompress(chunk))
-                    if out.tell() > 4 * MAX_RECORD:
-                        return None, "too_large"
-            record = out.getvalue()
-            break
-        except urllib.error.HTTPError as e:
-            if e.code in (403, 404):
-                return None, f"http_{e.code}"
-            time.sleep(min(60, 2 ** attempt) + random.random())  # 503 SlowDown and friends
-        except (urllib.error.URLError, TimeoutError, ConnectionError, zlib.error, OSError):
-            time.sleep(min(60, 2 ** attempt) + random.random())
-    else:
+            r = _session().get(url, headers={"Range": f"bytes={start}-{end}"}, timeout=60)
+            if r.status_code in (200, 206):
+                return r.content  # read fully, so the connection goes back to the pool
+            if r.status_code in (403, 404, 416):
+                return None
+        except Exception:  # noqa: BLE001, S110 - connection resets and timeouts are retried below
+            pass
+        time.sleep(min(60, 2 ** attempt) + random.random())  # 503 SlowDown and friends
+    raise ConnectionError(url)
+
+
+def fetch_pdf(rec: dict) -> tuple[bytes | None, str]:
+    """Fetch one gzip-compressed WARC record in growing byte ranges (1 MB, 4 MB, 16 MB...) until the
+    gzip member ends, and return its PDF payload, or None and a reason."""
+    url, pos, size = CC + rec["file_path"], int(rec["offset"]), FIRST_RANGE
+    dec = zlib.decompressobj(16 + zlib.MAX_WBITS)  # one gzip member = one WARC record
+    out, fetched = io.BytesIO(), 0
+    try:
+        while not dec.eof:
+            chunk = _get_range(url, pos, pos + size - 1)
+            if not chunk:
+                return None, "http_error"
+            out.write(dec.decompress(chunk))
+            fetched, pos, size = fetched + len(chunk), pos + len(chunk), min(size * 4, 16 << 20)
+            if fetched >= MAX_RECORD:
+                return None, "too_large"
+    except ConnectionError:
         return None, "fetch_failed"
+    except zlib.error:
+        return None, "bad_gzip"
+    record = out.getvalue()
     warc_head, _, body = record.partition(b"\r\n\r\n")
     if b"WARC-Truncated" in warc_head:
         return None, "warc_truncated"
@@ -144,11 +162,13 @@ def main() -> None:
     a = ap.parse_args()
 
     import boto3
+    from boto3.s3.transfer import TransferConfig
     from botocore.config import Config
 
     s3 = boto3.client("s3", endpoint_url=a.endpoint, region_name=a.region,
                       aws_access_key_id=os.environ["S3_ACCESS_KEY"], aws_secret_access_key=os.environ["S3_SECRET_KEY"],
                       config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
+    transfer = TransferConfig(multipart_chunksize=32 << 20, max_concurrency=8)  # parallel multipart shard uploads
     prefix = f"{a.prefix}/{a.config}/w{a.worker:03d}of{a.workers:03d}"
     try:
         state = json.loads(s3.get_object(Bucket=a.bucket, Key=f"{prefix}/state.json")["Body"].read())
@@ -168,38 +188,63 @@ def main() -> None:
     t0, last_log = time.time(), 0.0
     pool = get_context("spawn").Pool(max(1, os.cpu_count() or 1), maxtasksperchild=50)
 
-    def flush(next_index: int) -> None:
-        nonlocal shard
-        if shard.manifest:
-            s3.put_object(Bucket=a.bucket, Key=shard.key, Body=shard.close())
+    uploader = ThreadPoolExecutor(1)  # uploads run beside fetching; at most one shard in flight
+    pending = None
+
+    def flush(next_index: int, wait: bool = False) -> None:
+        nonlocal shard, pending
+        body, key = (shard.close(), shard.key) if shard.manifest else (None, None)
+        if body is not None:
             state["shard"] += 1
-        state.update(next=next_index, counts=counts)
-        s3.put_object(Bucket=a.bucket, Key=f"{prefix}/state.json", Body=json.dumps(state).encode())
+        snapshot = json.dumps(dict(state, next=next_index, counts=dict(counts))).encode()
+        if pending is not None:
+            pending.result()  # bounded memory: wait for the previous shard before queuing the next
+
+        def upload():
+            if body is not None:
+                s3.upload_fileobj(io.BytesIO(body), a.bucket, key, Config=transfer)
+            s3.put_object(Bucket=a.bucket, Key=f"{prefix}/state.json", Body=snapshot)  # only after its shard
+
+        pending = uploader.submit(upload)
+        if wait:
+            pending.result()
         shard = Shard(prefix, state["shard"])
 
-    def fetched():  # bounded windows: ex.map would otherwise queue every record and hold every PDF
-        with ThreadPoolExecutor(a.threads) as ex:
-            for w in range(0, len(mine), 1000):
-                yield from zip(mine[w:w + 1000], ex.map(fetch_pdf, mine[w:w + 1000]))
+    def work(rec: dict):
+        """Fetch, hash and page-check one record (runs in a fetch thread, so checks run in parallel)."""
+        data, why = fetch_pdf(rec)
+        if data is None:
+            return rec, None, why, None, 0
+        sha = hashlib.sha256(data).hexdigest()
+        if sha in exclude:
+            return rec, None, "excluded", sha, 0
+        try:
+            pages = pool.apply_async(_pages, (data,)).get(timeout=30)
+        except Exception:  # noqa: BLE001 - hostile or broken PDF, or a hung parser
+            pages = 0
+        why = "ok" if 0 < pages <= a.max_pages else ("encrypted" if pages < 0 else "bad_pages")
+        return rec, data if why == "ok" else None, why, sha, pages
 
-    for k, (rec, (data, why)) in enumerate(fetched()):
+    def results():
+        """Sliding window: keep 4 x threads records in flight, yield results in record order."""
+        with ThreadPoolExecutor(a.threads) as ex:
+            it, window = iter(mine), deque()
+            for rec in it:
+                window.append(ex.submit(work, rec))
+                if len(window) >= 4 * a.threads:
+                    yield window.popleft().result()
+            while window:
+                yield window.popleft().result()
+
+    for k, (rec, data, why, sha, pages) in enumerate(results()):
         if data is not None:
-            sha = hashlib.sha256(data).hexdigest()
-            if sha in exclude:
-                why = "excluded"
-            elif sha in seen:
+            if sha in seen:
                 why = "duplicate"
             else:
-                try:
-                    pages = pool.apply_async(_pages, (data,)).get(timeout=30)
-                except Exception:  # noqa: BLE001 - hostile or broken PDF, or a hung parser
-                    pages = 0
-                why = "ok" if 0 < pages <= a.max_pages else ("encrypted" if pages < 0 else "bad_pages")
-                if why == "ok":
-                    seen.add(sha)
-                    shard.add(f"{rec['id']}.pdf", data, {"id": rec["id"], "url": rec["url"], "sha256": sha,
-                                                          "bytes": len(data), "pages": pages, "config": a.config,
-                                                          "file_path": rec["file_path"], "offset": rec["offset"]})
+                seen.add(sha)
+                shard.add(f"{rec['id']}.pdf", data, {"id": rec["id"], "url": rec["url"], "sha256": sha,
+                                                      "bytes": len(data), "pages": pages, "config": a.config,
+                                                      "file_path": rec["file_path"], "offset": rec["offset"]})
         counts[why] = counts.get(why, 0) + 1
         if shard.bytes >= a.shard_mb << 20:
             flush(base + k + 1)
@@ -208,7 +253,8 @@ def main() -> None:
             rate = (k + 1) / (time.time() - t0)
             print(f"progress {base + k + 1}/{base + len(mine)}  {rate:.1f} rec/s  "
                   f"eta {(len(mine) - k - 1) / max(rate, 1e-9) / 3600:.1f} h  {json.dumps(counts)}", flush=True)
-    flush(base + len(mine))
+    flush(base + len(mine), wait=True)
+    uploader.shutdown()
     pool.terminate()
     print(f"DONE worker {a.worker}: {json.dumps(counts)}", flush=True)
 

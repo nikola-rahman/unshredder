@@ -54,7 +54,7 @@ export PATH="\$HOME/.local/bin:\$PATH"
 cd unshredder && git pull -q
 tmux kill-session -t collect 2>/dev/null || true
 tmux new-session -d -s collect -e S3_ACCESS_KEY="\$S3_ACCESS_KEY" -e S3_SECRET_KEY="\$S3_SECRET_KEY" \
-  "cd /root/unshredder && uv run --no-project --with pyarrow --with huggingface_hub --with boto3 --with pymupdf \
+  "cd /root/unshredder && uv run --no-project --with pyarrow --with huggingface_hub --with boto3 --with pymupdf --with requests \
    python scripts/data/collect_finepdfs.py --config $config --worker $w --workers $n --prefix $prefix \
    --exclude-sha256 configs/finepdfs_eval_exclude.sha256 ${EXTRA_ARGS:-} 2>&1 | tee /root/collect.log; echo FINISHED; sleep infinity"
 echo "started worker $w on $name (tmux session: collect)"
