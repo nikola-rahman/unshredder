@@ -11,7 +11,7 @@
 # Needs: hcloud with an active context, an SSH key at ~/.ssh/id_ed25519.pub, and S3_ACCESS_KEY /
 # S3_SECRET_KEY in the environment. The S3 keys are passed to each worker over SSH only; they are
 # never written to Hetzner metadata (cloud-init) or to disk on the servers.
-# Without a server type, the cheapest non-deprecated type at the location is used. Workers resume
+# Without a server type/location, the cheapest type that is orderable right now (and where) is used. Workers resume
 # from their last uploaded shard, so `up` after a crash or `down` continues where they stopped.
 set -euo pipefail
 
@@ -26,14 +26,17 @@ servers() { hcloud server list -l "$label" -o noheader -o columns=name,ipv4; }
 
 case "$cmd" in
 up)
-  n=${3:?number of workers}; loc=${5:-fsn1}
+  n=${3:?number of workers}
   : "${S3_ACCESS_KEY:?}" "${S3_SECRET_KEY:?}"
-  type=${4:-$(hcloud server-type list -o json | python3 -c "
+  # cheapest (type, location) that can actually be ordered now; [type] [location] override it
+  read -r type loc < <(hcloud server-type list -o json | python3 -c "
 import json, sys
-loc = sys.argv[1]
-ok = [(float(p['price_hourly']['gross']), t['name']) for t in json.load(sys.stdin) if not t.get('deprecation')
-      for p in t['prices'] if p['location'] == loc]
-print(min(ok)[1])" "$loc")}
+want_t, want_l = (sys.argv[1:] + ['', ''])[:2]
+rows = [(float(p['price_hourly']['gross']), t['name'], l['name']) for t in json.load(sys.stdin)
+        for l in t['locations'] if l['available'] and not l.get('deprecation')
+        for p in t['prices'] if p['location'] == l['name']
+        if (not want_t or t['name'] == want_t) and (not want_l or l['name'] == want_l)]
+print(*min(rows)[1:])" "${4:-}" "${5:-}")
   hcloud ssh-key describe unshredder >/dev/null 2>&1 ||
     hcloud ssh-key create --name unshredder --public-key-from-file ~/.ssh/id_ed25519.pub >/dev/null
   echo "creating $n x $type in $loc for $config"
