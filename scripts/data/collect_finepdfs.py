@@ -77,6 +77,7 @@ class Throttle:
 
 
 THROTTLE = Throttle(4.0)  # replaced in main() from --rate
+SOURCE = "https"  # "s3": signed reads of s3://commoncrawl (needs AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)
 BLOCK_LIMIT = 4 * 3600  # give up (and exit, resumable) after this long without a successful request
 
 
@@ -121,6 +122,39 @@ def list_records(config: str, max_records: int | None, s3=None, bucket: str = ""
         s3.upload_file(str(local), bucket, key)
     return rows
 
+def _s3_cc():
+    """Per-thread S3 client for the commoncrawl bucket (us-east-1), signed with the reader key from the env."""
+    if not hasattr(_local, "cc"):
+        import boto3
+        from botocore.config import Config
+
+        _local.cc = boto3.Session().client("s3", region_name="us-east-1", config=Config(
+            retries={"mode": "standard", "max_attempts": 3}, max_pool_connections=4))
+    return _local.cc
+
+
+def _get_range_s3(key: str, start: int, end: int) -> bytes | None:
+    """Same contract as the HTTPS path: SlowDown/throttling pauses all threads, never fails the record."""
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    since = time.monotonic()
+    while time.monotonic() - since < BLOCK_LIMIT:
+        THROTTLE.acquire()
+        try:
+            body = _s3_cc().get_object(Bucket="commoncrawl", Key=key, Range=f"bytes={start}-{end}")["Body"].read()
+            THROTTLE.reward()
+            return body
+        except ClientError as e:
+            code = e.response.get("Error", {}).get("Code", "")
+            status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode", 0)
+            if code in ("NoSuchKey", "InvalidRange") or status in (404, 416):
+                return None
+            THROTTLE.penalize(status or 503)  # SlowDown, 503, throttling, 403 from rate rules
+        except BotoCoreError:  # connection resets, timeouts
+            time.sleep(1 + random.random())
+    raise RuntimeError(f"Common Crawl S3 kept refusing requests for {BLOCK_LIMIT / 3600:.0f} h; stopping (resumable)")
+
+
 def _get_range(url: str, start: int, end: int) -> bytes | None:
     """One byte range, politely: waits for the shared budget, backs off on rate limits, never gives up on
     a record because of them (it exits after BLOCK_LIMIT instead, so the run resumes later)."""
@@ -145,11 +179,12 @@ def fetch_pdf(rec: dict) -> tuple[bytes | None, str]:
     """Fetch one gzip-compressed WARC record in growing byte ranges (1 MB, 4 MB, 16 MB...) until the
     gzip member ends, and return its PDF payload, or None and a reason."""
     url, pos, size = CC + rec["file_path"], int(rec["offset"]), FIRST_RANGE
+    get = (lambda a, b: _get_range_s3(rec["file_path"], a, b)) if SOURCE == "s3" else (lambda a, b: _get_range(url, a, b))
     dec = zlib.decompressobj(16 + zlib.MAX_WBITS)  # one gzip member = one WARC record
     out, fetched = io.BytesIO(), 0
     try:
         while not dec.eof:
-            chunk = _get_range(url, pos, pos + size - 1)
+            chunk = get(pos, pos + size - 1)
             if not chunk:
                 return None, "http_error"
             out.write(dec.decompress(chunk))
@@ -228,8 +263,11 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--bucket", default="unshredder")
     ap.add_argument("--endpoint", default="https://s3.hippius.com")
     ap.add_argument("--region", default="decentralized")
-    ap.add_argument("--threads", type=int, default=8, help="concurrent Common Crawl fetches")
-    ap.add_argument("--rate", type=float, default=4.0, help="max Common Crawl requests per second (per worker)")
+    ap.add_argument("--source", choices=["s3", "https"],
+                    default="s3" if os.environ.get("AWS_ACCESS_KEY_ID") else "https",
+                    help="s3: signed reads of s3://commoncrawl (AWS reader key in env); https: data.commoncrawl.org")
+    ap.add_argument("--threads", type=int, help="concurrent fetches (default 32 for s3, 8 for https)")
+    ap.add_argument("--rate", type=float, help="max requests per second per worker (default 50 for s3, 4 for https)")
     ap.add_argument("--shard-mb", type=int, default=256)
     ap.add_argument("--max-pages", type=int, default=500)
     ap.add_argument("--max-records", type=int, help="only the first N records of the config (tests)")
@@ -239,8 +277,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def main(a: argparse.Namespace) -> None:
-    global THROTTLE
+    global THROTTLE, SOURCE
+    SOURCE = a.source
+    a.threads = a.threads or (32 if a.source == "s3" else 8)
+    a.rate = a.rate or (50.0 if a.source == "s3" else 4.0)
     THROTTLE = Throttle(a.rate)
+    log.info("fetching from %s: %d threads, at most %.0f requests/s", a.source, a.threads, a.rate)
     import boto3
     from boto3.s3.transfer import TransferConfig
     from botocore.config import Config
