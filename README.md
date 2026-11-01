@@ -71,3 +71,7 @@ unshredder train-seamnet -c configs/seamnet.yaml      # training
 ```bash
 uv run pytest
 ```
+
+## License
+
+MIT, see `LICENSE`. Model weights: [LatentLobster/unshredder-seamnet](https://huggingface.co/LatentLobster/unshredder-seamnet).

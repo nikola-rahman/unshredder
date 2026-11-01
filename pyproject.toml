@@ -3,6 +3,7 @@ name = "unshredder"
 version = "0.1.0"
 description = "Reconstruct strip-shredded documents with a learned seam model and a human review app"
 readme = "README.md"
+license = "MIT"
 authors = [
     { name = "Nikola Rahman", email = "nikola.rahman.89@gmail.com" }
 ]
