@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run scripts/data/collect_finepdfs.py on N Hetzner Cloud servers (one worker each).
 #
-#   scripts/data/hetzner_collect.sh up <config> <n> [server-type] [location]   # create servers, start workers
+#   scripts/data/hetzner_collect.sh up <config> <n> <type> <location>          # create servers, start workers
 #   scripts/data/hetzner_collect.sh status <config>                             # last progress line per worker
 #   scripts/data/hetzner_collect.sh attach <config> <worker>                    # watch a worker live (tmux)
 #   scripts/data/hetzner_collect.sh down <config>                               # delete the servers
@@ -11,7 +11,7 @@
 # Needs: hcloud with an active context, an SSH key at ~/.ssh/id_ed25519.pub, and S3_ACCESS_KEY /
 # S3_SECRET_KEY in the environment. The S3 keys are passed to each worker over SSH only; they are
 # never written to Hetzner metadata (cloud-init) or to disk on the servers.
-# Without a server type/location, the cheapest type that is orderable right now (and where) is used. Workers resume
+# Type and location are chosen by hand (see `hcloud server-type list` for what is orderable). Workers resume
 # from their last uploaded shard, so `up` after a crash or `down` continues where they stopped.
 set -euo pipefail
 
@@ -26,17 +26,8 @@ servers() { hcloud server list -l "$label" -o noheader -o columns=name,ipv4; }
 
 case "$cmd" in
 up)
-  n=${3:?number of workers}
+  n=${3:?number of workers}; type=${4:?server type, e.g. cx23}; loc=${5:?location, e.g. hel1}
   : "${S3_ACCESS_KEY:?}" "${S3_SECRET_KEY:?}"
-  # cheapest (type, location) that can actually be ordered now; [type] [location] override it
-  read -r type loc < <(hcloud server-type list -o json | python3 -c "
-import json, sys
-want_t, want_l = (sys.argv[1:] + ['', ''])[:2]
-rows = [(float(p['price_hourly']['gross']), t['name'], l['name']) for t in json.load(sys.stdin)
-        for l in t['locations'] if l['available'] and not l.get('deprecation')
-        for p in t['prices'] if p['location'] == l['name']
-        if (not want_t or t['name'] == want_t) and (not want_l or l['name'] == want_l)]
-print(*min(rows)[1:])" "${4:-}" "${5:-}")
   hcloud ssh-key describe unshredder >/dev/null 2>&1 ||
     hcloud ssh-key create --name unshredder --public-key-from-file ~/.ssh/id_ed25519.pub >/dev/null
   echo "creating $n x $type in $loc for $config"
