@@ -16,7 +16,8 @@
 set -euo pipefail
 
 cmd=${1:?up|status|down}; config=${2:?FinePDFs config, e.g. srp_Cyrl}
-label="role=collector,config=${config//_/-}"
+slug=$(echo "${config//_/-}" | tr '[:upper:]' '[:lower:]')  # server names must be lowercase hostnames
+label="role=collector,config=$slug"
 prefix=${PREFIX:-unshredder/collect/finepdfs}  # PREFIX / EXTRA_ARGS (e.g. "--max-records 2000") for test runs
 repo="https://github.com/nikola-rahman/unshredder.git"
 ssh_opts=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes)
@@ -37,8 +38,8 @@ print(min(ok)[1])" "$loc")}
     hcloud ssh-key create --name unshredder --public-key-from-file ~/.ssh/id_ed25519.pub >/dev/null
   echo "creating $n x $type in $loc for $config"
   for w in $(seq 0 $((n - 1))); do
-    hcloud server create --name "collect-${config//_/-}-$w" --type "$type" --location "$loc" \
-      --image ubuntu-24.04 --ssh-key unshredder --label "$label" --label "worker=$w" >/dev/null &
+    hcloud server create --name "collect-$slug-$w" --type "$type" --location "$loc" \
+      --image ubuntu-24.04 --ssh-key unshredder --label "$label" --label "worker=$w" 2>&1 | grep -vE '^(Waiting|Server [0-9]+ created|IPv)' &
   done
   wait
   servers | while read -r name ip; do
@@ -69,7 +70,7 @@ status)
   ;;
 attach)
   w=${3:?worker number}
-  ip=$(servers | awk -v n="collect-${config//_/-}-$w" '$1 == n {print $2}')
+  ip=$(servers | awk -v n="collect-$slug-$w" '$1 == n {print $2}')
   exec ssh -t "${ssh_opts[@]}" "root@$ip" tmux attach -t collect
   ;;
 down)
