@@ -17,7 +17,7 @@ set -euo pipefail
 
 cmd=${1:?up|status|down}; config=${2:?FinePDFs config, e.g. srp_Cyrl}
 label="role=collector,config=${config//_/-}"
-prefix="unshredder/collect/finepdfs"
+prefix=${PREFIX:-unshredder/collect/finepdfs}  # PREFIX / EXTRA_ARGS (e.g. "--max-records 2000") for test runs
 repo="https://github.com/nikola-rahman/unshredder.git"
 ssh_opts=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes)
 
@@ -56,7 +56,7 @@ tmux kill-session -t collect 2>/dev/null || true
 tmux new-session -d -s collect -e S3_ACCESS_KEY="\$S3_ACCESS_KEY" -e S3_SECRET_KEY="\$S3_SECRET_KEY" \
   "cd /root/unshredder && uv run --no-project --with pyarrow --with huggingface_hub --with boto3 --with pymupdf \
    python scripts/data/collect_finepdfs.py --config $config --worker $w --workers $n --prefix $prefix \
-   --exclude-sha256 configs/finepdfs_eval_exclude.sha256 2>&1 | tee /root/collect.log; echo FINISHED; sleep infinity"
+   --exclude-sha256 configs/finepdfs_eval_exclude.sha256 ${EXTRA_ARGS:-} 2>&1 | tee /root/collect.log; echo FINISHED; sleep infinity"
 echo "started worker $w on $name (tmux session: collect)"
 EOF
   done
