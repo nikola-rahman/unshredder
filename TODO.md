@@ -62,3 +62,16 @@ To do: shredder simulator for cross-cut (particle sizes per DIN level, cut angle
 corners); SeamNet variant scoring horizontal seams too (shared encoder, rotated bands); 2-D
 assembly (grid placement instead of chains) and a review UI for 2-D pieces; find real cross-cut
 datasets for evaluation; measure per DIN level what is still recoverable.
+
+### Graph neural network for assembly (raised 2026-11-01)
+The pile is naturally a graph: strips are nodes, top-k seam candidates are edges (already produced by
+sparse scoring). A GNN can pass messages along candidate edges and score joins jointly instead of pair
+by pair (one strip can have only one right neighbour; line grid / margins / font must stay consistent
+along a chain). Related: DiffAssemble (GNN + diffusion, 2024), ReassembleNet (ICCV 2025). Start as a
+re-scorer on top of SeamNet's top-k graph; measure on reviewer decisions per document.
+
+### Reinforcement learning / search for assembly (raised 2026-11-01)
+Treat assembly as sequential decisions (which join to commit next, or which question to ask the
+reviewer next) and learn a policy, e.g. SD2RL (AAAI 2023), deep MCTS (Alphazzle, 2023). Reward:
+correct pages for fewest reviewer decisions. Likely only practical inside a piece / small candidate
+set, not over the whole pile.
