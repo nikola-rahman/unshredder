@@ -120,7 +120,7 @@ def is_blank(gray: np.ndarray) -> bool:
 def seam_features(strip: dict) -> tuple[np.ndarray, np.ndarray]:
     """(left, right) border images, ROWS x 16 each, binary (1 = paper), as in proposed.py."""
     gray, mask = strip["gray"], strip["mask"]
-    binary = (gray > threshold_sauvola(gray)).astype(np.float32)
+    binary = (gray > threshold_sauvola(gray, r=127.5)).astype(np.float32)  # their uint8 images: r = half the dtype range
     h, w = gray.shape
     has = mask.any(axis=1)
     first = np.where(has, mask.argmax(axis=1), 0)
