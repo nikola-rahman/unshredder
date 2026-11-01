@@ -28,6 +28,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
+from torch.utils.checkpoint import checkpoint
 
 from .config import Config
 from .costs import normalize_strip
@@ -90,6 +91,7 @@ class SeamNet(nn.Module):
         self.log_scale = nn.Parameter(torch.tensor(math.log(1 / math.sqrt(dim))))
         self.null = nn.Parameter(torch.tensor(0.0))  # per-row "no neighbour" logit
         self.compiled_trunk = None  # set by train(); eval keeps eager for variable heights
+        self.checkpoint = False  # set by train(): recompute trunk activations in backward
 
     def encode(self, bands: torch.Tensor, side: str) -> torch.Tensor:
         """bands (N, 1, H, band), cut on the right, [0,1] -> (N, dim, H/4)."""
@@ -103,7 +105,10 @@ class SeamNet(nn.Module):
         pad = (-n) % chunk
         if pad:
             bands = torch.cat([bands, bands.new_ones(pad, *bands.shape[1:])])
-        out = torch.cat([self.compiled_trunk(c) for c in bands.split(chunk)])
+        if self.checkpoint:
+            out = torch.cat([checkpoint(self.compiled_trunk, c, use_reentrant=False) for c in bands.split(chunk)])
+        else:
+            out = torch.cat([self.compiled_trunk(c) for c in bands.split(chunk)])
         return head(out[:n])
 
     def trunk(self, bands: torch.Tensor) -> torch.Tensor:
@@ -405,6 +410,7 @@ def train(cfg: Config) -> Path:
             dist.broadcast(prm.data, 0)
     if sc.compile and dev.type == "cuda":
         model.compiled_trunk = torch.compile(model.trunk)  # fixed training shapes: fuses LN/GELU/dwconv
+    model.checkpoint = sc.checkpoint
     opt = torch.optim.AdamW(model.parameters(), lr=sc.lr, weight_decay=sc.weight_decay)
     sched = torch.optim.lr_scheduler.LambdaLR(
         opt, lambda s: min(1.0, (s + 1) / sc.warmup) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / sc.steps)))
