@@ -158,7 +158,12 @@ def compatibilities(model: nn.Module, feats: list[tuple[np.ndarray, np.ndarray]]
             shifted[:, k] = Lf
     C = np.zeros((n, n), np.float32)
     per = max(1, batch // (2 * VSHIFT + 1))
+    t0, every = time.perf_counter(), max(1, n // 50)
     for i in range(n):
+        if i and i % every == 0:
+            done, el = i * (n - 1), time.perf_counter() - t0
+            print(f"progress {i}/{n} rows  {done}/{n * (n - 1)} pairs  {done / el:.0f} pairs/s  "
+                  f"eta {(n * (n - 1) - done) / (done / el) / 60:.1f} min", flush=True)
         for j0 in range(0, n, per):
             js = torch.arange(j0, min(n, j0 + per), device=dev)
             right = Rf[i].expand(len(js), 2 * VSHIFT + 1, ROWS, HALF)
@@ -220,6 +225,7 @@ def main() -> None:
         chain += [{"name": strips[k]["name"], "flipped": False, "blank": True} for k in blanks]
         m = evaluate([chain], truth) | {"seconds": round(elapsed, 1),
                                         "group": group[0].name if a.mode == "single" else "mixed"}
+        m["chain"] = [e["name"] for e in chain]  # reconstruction order (blanks last), for per-document breakdowns
         results.append(m)
         print(json.dumps(m), flush=True)
 
