@@ -7,6 +7,19 @@ and a review app asks a person only about the uncertain ones.
 On 45 held-out real shredded documents pooled into one pile, the model needs about
 **3.4 reviewer decisions per document** to get every page 100% right (see `RESULTS.md`).
 
+Automatic reconstruction of mixed piles, compared with the state of the art (Paixão et al. 2020,
+run from their released code) on the same held-out test documents. Neighbour accuracy with 95% CIs:
+
+| test pile | ours | PR 2020 | CVPR 2020 |
+|---|---|---|---|
+| D1, 15 docs | **100.0%** [100.0, 100.0] | 99.1% [97.4, 100.0] | 90.4% [78.4, 98.0] |
+| D2, 5 docs | 82.6% [65.1, 94.9] | 88.4% [79.7, 95.0] | 90.9% [84.0, 97.6] |
+| D3, 25 docs | **97.8%** [96.8, 98.8] | 91.2% [87.6, 94.5] | n/a |
+
+Ours is better on D3 (+6.6 points, CI +3.4 to +10.1) and against CVPR 2020 on D1, tied with PR 2020 on D1,
+and not distinguishable on D2 (5 documents). Our model trained on other documents of the same datasets;
+theirs did not. Details in `RESULTS.md`.
+
 Currently strip-cut only, upright strips. Cross-cut and rotated strips are in `TODO.md`.
 
 ## Setup

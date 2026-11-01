@@ -100,3 +100,33 @@ Oracle reviewer, top-5 suggestions, auto-join ≥ 0.9999, page-check rejections 
 | run 3 final | 5.29 | [3.29, 7.93] | 142 | 1037 |
 
 Paired (run 3 − run 2): +1.87 decisions/doc, 95% CI [+0.80, +3.29]; run 3 cheaper on 8, dearer on 24, equal on 13 docs. Run 2 is better; run 3's extra training made it more confidently wrong.
+
+## Comparison with the state of the art: mixed test piles (2026-11-01)
+
+Each dataset's test split (never used for training or checkpoint selection) pooled into one shuffled pile:
+D1 = D047–D061 (15 docs, 345 strips), D2 = D016–D020 (5 docs, 122 strips), D3 = D076–D100 (25 docs, 559 strips).
+All methods scored on the same strips with Paixão et al.'s accuracy (fraction of correct adjacent pairs; a
+document's last strip followed by another's first counts as correct) and their blank rule. 95% CIs by
+bootstrap over documents; differences are paired by document.
+
+| pile | run 2 (ours) | PR 2020 (Paixão, Pattern Recognition) | CVPR 2020 (Paixão) |
+|---|---|---|---|
+| D1 | **100.0%** [100.0, 100.0] | 99.1% [97.4, 100.0] | 90.4% [78.4, 98.0] |
+| D2 | 82.6% [65.1, 94.9] | 88.4% [79.7, 95.0] | 90.9% [84.0, 97.6] |
+| D3 | **97.8%** [96.8, 98.8] | 91.2% [87.6, 94.5] | n/a (its only model was trained on D3's source documents) |
+
+Paired differences (run 2 − baseline): D1 vs PR 2020 +0.9 [0.0, +2.6], vs CVPR 2020 +9.6 [+2.0, +21.6];
+D2 vs PR 2020 −5.8 [−27.2, +8.3], vs CVPR 2020 −8.3 [−30.4, +5.8]; D3 vs PR 2020 **+6.6 [+3.4, +10.1]**.
+Run 2 is clearly better on D3 and vs CVPR 2020 on D1, tied with PR 2020 on D1, and not distinguishable on D2
+(5 documents; the gap is one page, D018, 13/26 joins vs 25–26 for both baselines).
+
+Caveat: run 2 trained on *other* documents of D1–D3 (same shredders and scanners); Paixão's models never saw
+real shreds from these datasets.
+
+Baselines were run from the authors' released code and weights. PR 2020 uses their CDIP model on D1/D2 and their
+ISRI model on D3, as in their paper. Checks: CVPR 2020 (original TF code, CPU) reproduces its published full-D2 pile
+result (97.02% vs 97.22%). PR 2020 ran in its original TF 1.11 code on D1/D2 (99.13%, 88.43%); our PyTorch port
+(`baselines/deeprec_pr20`, fixed Sauvola range r=127.5) reproduces both exactly and was used for D3 (~400 pairs/s
+on one A6000, against ~25 pairs/s for the original code). Speed: PR 2020 evaluates its network on every pair of strips
+(×21 vertical shifts), ours and CVPR 2020 embed each edge once.
+Result files: S3 `unshredder/cmp/2026-11-01/`.
