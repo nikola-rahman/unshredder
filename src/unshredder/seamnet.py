@@ -503,12 +503,14 @@ def _allreduce_grads(model: nn.Module, world: int) -> None:
 def train(cfg: Config) -> Path:
     """Single GPU: `unshredder train-seamnet ...`.
     Multi GPU:  `torchrun --nproc_per_node 8 -m unshredder train-seamnet ...`."""
+    import os
+
     sc = cfg.seamnet
     world, rank, ddp_dev = _setup_distributed()
     main = rank == 0
     torch.manual_seed(cfg.seed + rank)
     dev = ddp_dev or device(sc.device)
-    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.benchmark = os.environ.get("SEAMNET_CUDNN_BENCHMARK", "1") == "1"
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     model = SeamNet(sc.band, sc.dim, sc.pretrained, sc.row_context)
@@ -545,8 +547,6 @@ def train(cfg: Config) -> Path:
     if main:
         print(f"training on {world}x {dev.type}; sources synth/pages/shreds = "
               f"{loader.dataset.weights.round(2).tolist()}; augment={sc.augment}", flush=True)
-    import os
-
     prof_at = int(os.environ.get("SEAMNET_PROFILE", "0"))  # profile 10 steps from this one on rank 0, then stop
     bal_at = int(os.environ.get("SEAMNET_BALANCE", "0"))  # log per-rank edges / gather wait for 10 steps from here
     prof = None
