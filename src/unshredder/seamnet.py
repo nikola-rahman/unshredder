@@ -427,12 +427,14 @@ def _gather(x: torch.Tensor, world: int) -> tuple[torch.Tensor, int, torch.Tenso
 def contrastive_loss(model: SeamNet, R: torch.Tensor, L: torch.Tensor, target: torch.Tensor, max_shift: int,
                      world: int = 1):
     """InfoNCE over all edges on all GPUs, plus a learned "no neighbour" option."""
-    er, el = model.encode(R, "r").float(), model.encode(L, "l").float()
+    er_h, el_h = model.encode(R, "r"), model.encode(L, "l")  # bf16 under autocast
+    er, el = er_h.float(), el_h.float()
     n, h = er.shape[0], er.shape[2]
     dev = er.device
-    if world > 1:
-        er_g, offset, valid = _gather(er, world)
-        el_g, _, _ = _gather(el, world)
+    if world > 1:  # exchange in the encoder's own precision (bf16): same values, half the bytes on the GPU links
+        er_g, offset, valid = _gather(er_h, world)
+        el_g, _, _ = _gather(el_h, world)
+        er_g, el_g = er_g.float(), el_g.float()
     else:
         er_g, el_g, offset, valid = er, el, 0, torch.ones(n, dtype=torch.bool, device=dev)
     N = er_g.shape[0]
