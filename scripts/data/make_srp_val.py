@@ -63,7 +63,9 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=200, help="documents (one page each) in the validation set")
     ap.add_argument("--percent", type=int, default=2, help="share of websites held out")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--exclude-shards", help="file of shard names a model already trained on; never sample from them")
     a = ap.parse_args()
+    seen = set(Path(a.exclude_shards).read_text().split()) if a.exclude_shards else set()
 
     shards = Path(a.shards)
     rows = sqlite3.connect(shards / "index.sqlite").execute(
@@ -81,7 +83,7 @@ def main() -> None:
         if made >= a.n:
             break
         local = shards / key.rsplit("/", 1)[1]
-        if not local.exists():
+        if local.name in seen or not local.exists():
             continue  # this shard is not cached locally; the fixed order simply moves on
         with open(local, "rb") as f:
             f.seek(off)
