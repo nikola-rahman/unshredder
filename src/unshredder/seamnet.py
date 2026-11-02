@@ -220,6 +220,8 @@ class ShardPages:
         self.done: set[str] = set()
         self.readers: list = []
         self.buffer: list[bytes] = []
+        held = self.dir / "heldout.txt"  # validation-only PDFs (scripts/data/make_srp_val.py): never trained on
+        self.heldout = set(held.read_text().split()) if held.exists() else set()
 
     def _mine(self) -> list[Path]:
         return [p for p in sorted(self.dir.glob("*.tar")) if int(hashlib.md5(p.name.encode()).hexdigest(), 16) % self.n == self.worker]
@@ -234,7 +236,8 @@ class ShardPages:
         path = todo[int(self.rng.integers(len(todo)))]
         self.done.add(path.name)
         tar = tarfile.open(path)  # noqa: SIM115 - stays open while its members are consumed; closed in _next_pdf
-        self.readers.append((tar, (m for m in tar if m.isfile() and m.name.endswith(".pdf"))))
+        self.readers.append((tar, (m for m in tar if m.isfile() and m.name.endswith(".pdf")
+                                   and m.name[:-4] not in self.heldout)))
         return True
 
     def _next_pdf(self) -> bytes | None:
@@ -655,6 +658,11 @@ def train(cfg: Config) -> Path:
                 if sc.val_dirs:
                     review = bool(sc.val_review_every) and (step % sc.val_review_every == 0 or step == sc.steps)
                     val = validate(model, sc.val_dirs, sc.val_docs, sc.band, shift_rows, dev, review=review)
+                    if sc.val_dirs_practical:  # practical goal: held-out Serbian documents (simulated cuts)
+                        vp = validate(model, sc.val_dirs_practical, sc.val_docs, sc.band, shift_rows, dev)
+                        vp.pop("per_page", None)
+                        print(f"  val_srp: {vp}", flush=True)
+                        tracker.log({f"val_srp/{k}": v for k, v in vp.items()}, step=step)
                     per_doc = val.pop("per_page", {})
                     print(f"  val: {val}", flush=True)
                     tracker.log({f"val/{k}": v for k, v in val.items()}, step=step)

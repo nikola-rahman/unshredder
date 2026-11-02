@@ -111,7 +111,8 @@ class SeamNetConfig:
     shard_dir: str = ""  # local shard cache filled by scripts/data/sync_shards.py; *.tar files are used as they appear
     page_dirs: list[str] = field(default_factory=list)
     shred_dirs: list[str] = field(default_factory=list)
-    val_dirs: list[str] = field(default_factory=list)  # real shredded sets for validation
+    val_dirs: list[str] = field(default_factory=list)  # real shredded sets for validation (academic: D1-D3 splits)
+    val_dirs_practical: list[str] = field(default_factory=list)  # held-out Serbian set (make_srp_val.py), logged as val_srp/
     val_docs: int = 20  # documents per validation set
     workers: int = 8
     compile: bool = True  # torch.compile the encoder trunk during training (CUDA)
