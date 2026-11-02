@@ -424,6 +424,9 @@ def _gather_pair(a: torch.Tensor, b: torch.Tensor, world: int):
     return torch.cat([p[0] for p in parts]), torch.cat([p[1] for p in parts]), dist.get_rank() * m, valid
 
 
+_BALANCE_LOG: list = []  # filled only when SEAMNET_BALANCE is set (see train)
+
+
 def contrastive_loss(model: SeamNet, R: torch.Tensor, L: torch.Tensor, target: torch.Tensor, max_shift: int,
                      world: int = 1):
     """InfoNCE over all edges on all GPUs, plus a learned "no neighbour" option."""
@@ -432,7 +435,13 @@ def contrastive_loss(model: SeamNet, R: torch.Tensor, L: torch.Tensor, target: t
     n, h = er.shape[0], er.shape[2]
     dev = er.device
     if world > 1:  # exchange in the encoder's own precision (bf16): same values, half the bytes on the GPU links
+        if _BALANCE_LOG:  # diagnostics: per-rank edge count, own compute time, time spent waiting for the others
+            torch.cuda.synchronize()
+            t_ready = time.time()
         er_g, el_g, offset, valid = _gather_pair(er_h, el_h, world)
+        if _BALANCE_LOG:
+            torch.cuda.synchronize()
+            _BALANCE_LOG.append((n, t_ready, time.time()))
         er_g, el_g = er_g.float(), el_g.float()
     else:
         er_g, el_g, offset, valid = er, el, 0, torch.ones(n, dtype=torch.bool, device=dev)
@@ -539,6 +548,7 @@ def train(cfg: Config) -> Path:
     import os
 
     prof_at = int(os.environ.get("SEAMNET_PROFILE", "0"))  # profile 10 steps from this one on rank 0, then stop
+    bal_at = int(os.environ.get("SEAMNET_BALANCE", "0"))  # log per-rank edges / gather wait for 10 steps from here
     prof = None
     for step, batch in enumerate(loader, start=1):
         if prof_at and main and step == prof_at:
@@ -552,6 +562,14 @@ def train(cfg: Config) -> Path:
             print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=15), flush=True)
             prof = None
         model.train()
+        if bal_at and step == bal_at:
+            _BALANCE_LOG.append("on")
+        if bal_at and step == bal_at + 10:
+            rows = [r for r in _BALANCE_LOG if r != "on"]
+            waits = [t2 - t1 for _, t1, t2 in rows]
+            print(f"BALANCE rank {rank}: edges {[r[0] for r in rows]}  gather wait ms "
+                  f"{[round(1000 * w) for w in waits]}", flush=True)
+            _BALANCE_LOG.clear()
         with torch.no_grad():
             R, L, target = build_batch(batch, sc, gen, dev)
         with torch.autocast(dev.type, dtype=torch.bfloat16, enabled=amp):
