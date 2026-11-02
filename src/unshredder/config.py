@@ -115,6 +115,7 @@ class SeamNetConfig:
     val_docs: int = 20  # documents per validation set
     workers: int = 8
     compile: bool = True  # torch.compile the encoder trunk during training (CUDA)
+    cudnn_benchmark: bool = False  # cuDNN autotuning; off because batch shapes vary every step (see seamnet.train)
     checkpoint: bool = False  # recompute trunk activations in backward (same gradients, less GPU memory)
     log_every: int = 50
     eval_every: int = 1000
