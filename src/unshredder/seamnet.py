@@ -18,7 +18,9 @@ page borders. That logit doubles as the document-splitting threshold at reconstr
 
 from __future__ import annotations
 
+import hashlib
 import math
+import tarfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -202,20 +204,100 @@ def _draw_content(window: np.ndarray, rng) -> np.ndarray:
     return np.asarray(img)
 
 
+class ShardPages:
+    """Pages rendered on the fly from PDFs in local tar shards (one worker's view).
+
+    Each worker owns the shards with index % n_workers == worker_id, reads two at a time in random
+    order, keeps a small buffer of PDFs to mix them, and renders a random inked page at 300 dpi.
+    Shards are picked up as sync_shards.py finishes them (it renames *.part to *.tar)."""
+
+    DPI = 300
+    MAX_PIXELS = 40_000_000  # skip anything larger than ~A3 at 300 dpi
+    MIN_INK = 0.005
+
+    def __init__(self, shard_dir: str, worker: int, n_workers: int, rng, buffer: int = 64):
+        self.dir, self.worker, self.n, self.rng, self.size = Path(shard_dir), worker, n_workers, rng, buffer
+        self.done: set[str] = set()
+        self.readers: list = []
+        self.buffer: list[bytes] = []
+
+    def _mine(self) -> list[Path]:
+        return [p for p in sorted(self.dir.glob("*.tar")) if int(hashlib.md5(p.name.encode()).hexdigest(), 16) % self.n == self.worker]
+
+    def _open_next(self) -> bool:
+        todo = [p for p in self._mine() if p.name not in self.done]
+        if not todo:
+            if not self.done:
+                return False
+            self.done.clear()  # new epoch over this worker's shards
+            todo = self._mine()
+        path = todo[int(self.rng.integers(len(todo)))]
+        self.done.add(path.name)
+        tar = tarfile.open(path)  # noqa: SIM115 - stays open while its members are consumed; closed in _next_pdf
+        self.readers.append((tar, (m for m in tar if m.isfile() and m.name.endswith(".pdf"))))
+        return True
+
+    def _next_pdf(self) -> bytes | None:
+        while len(self.readers) < 2 and self._open_next():
+            pass
+        while self.readers:
+            k = int(self.rng.integers(len(self.readers)))
+            tar, members = self.readers[k]
+            m = next(members, None)
+            if m is None:
+                tar.close()
+                self.readers.pop(k)
+                self._open_next()
+                continue
+            return tar.extractfile(m).read()
+        return None
+
+    def page(self) -> np.ndarray | None:
+        """A uint8 grayscale page, or None while no shard is available yet."""
+        import pymupdf
+
+        pymupdf.TOOLS.mupdf_display_errors(False)
+        zoom = pymupdf.Matrix(self.DPI / 72, self.DPI / 72)
+        for _ in range(20):  # skip broken, encrypted, blank or oversized PDFs
+            while len(self.buffer) < self.size:
+                pdf = self._next_pdf()
+                if pdf is None:
+                    break
+                self.buffer.append(pdf)
+            if not self.buffer:
+                return None
+            data = self.buffer.pop(int(self.rng.integers(len(self.buffer))))
+            try:
+                with pymupdf.open(stream=data, filetype="pdf") as doc:
+                    if doc.needs_pass or doc.page_count == 0:
+                        continue
+                    pg = doc[int(self.rng.integers(min(doc.page_count, 50)))]
+                    if pg.rect.width * pg.rect.height * (self.DPI / 72) ** 2 > self.MAX_PIXELS:
+                        continue
+                    pix = pg.get_pixmap(matrix=zoom, colorspace=pymupdf.csGRAY, alpha=False)
+                    img = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width)
+                    if (img < 128).mean() >= self.MIN_INK:
+                        return img
+            except Exception:  # noqa: BLE001, S112 - hostile or malformed crawl PDFs are skipped
+                continue
+        return None
+
+
 class PageSource(torch.utils.data.IterableDataset):
     """Endless stream of training material for the GPU shredder:
     ("page", uint8 window, n_strips) from synthetic or real intact pages, or
     ("strips", R, L) edge bands from real shredded documents (already in true order)."""
 
-    def __init__(self, cfg: Config, seed: int):
-        self.cfg, self.seed = cfg, seed
+    def __init__(self, cfg: Config, seed: int, rank: int = 0, world: int = 1):
+        self.cfg, self.seed, self.rank, self.world = cfg, seed, rank, world
         sc = cfg.seamnet
         self.page_paths = []
         for d in sc.page_dirs:
             self.page_paths += sorted(p for p in Path(d).rglob("*") if p.suffix.lower() in {".tif", ".tiff", ".png", ".jpg"})
         self.shred_docs = [doc for d in sc.shred_dirs for doc in list_docs(d)]
+        self.has_shards = bool(sc.shard_dir) and Path(sc.shard_dir).is_dir()
         w = np.array([sc.synth_weight, sc.page_weight if self.page_paths else 0,
-                      sc.shred_weight if self.shred_docs else 0], dtype=float)
+                      sc.shred_weight if self.shred_docs else 0, sc.shard_weight if self.has_shards else 0], dtype=float)
         self.weights = w / w.sum()
         # Window tall enough for the GPU shredder's scale/stretch/shift range.
         self.window_rows = int(sc.crop_rows * 1.4) + 2 * sc.max_shift + 16
@@ -223,6 +305,11 @@ class PageSource(torch.utils.data.IterableDataset):
     def __iter__(self):
         info = torch.utils.data.get_worker_info()
         rng = np.random.default_rng(self.seed + (info.id if info else 0) * 7919)
+        self.shards = None
+        if self.has_shards:  # disjoint shards per data-loader worker across all ranks
+            n_workers = info.num_workers if info else 1
+            self.shards = ShardPages(self.cfg.seamnet.shard_dir, self.rank * n_workers + (info.id if info else 0),
+                                     self.world * n_workers, rng)
         while True:
             yield self.sample(rng)
 
@@ -237,7 +324,7 @@ class PageSource(torch.utils.data.IterableDataset):
 
     def sample(self, rng):
         sc = self.cfg.seamnet
-        kind = rng.choice(3, p=self.weights)
+        kind = rng.choice(4, p=self.weights)
         if kind == 2:  # real shredded document
             strips = [img for _, img in load_doc(self.shred_docs[rng.integers(len(self.shred_docs))])]
             h = max(max(s.shape[0] for s in strips), sc.crop_rows)
@@ -245,7 +332,11 @@ class PageSource(torch.utils.data.IterableDataset):
             y0 = self._window(np.mean([1 - s.mean(axis=1) for s in strips], axis=0), sc.crop_rows, rng)
             bands = [edge_bands(normalize_strip(s[y0 : y0 + sc.crop_rows]), sc.band) for s in strips]
             return ("strips", np.stack([b[0] for b in bands]), np.stack([b[1] for b in bands]))
-        if kind == 1:
+        if kind == 3:
+            page = self.shards.page()
+            if page is None:  # shards not synced yet: fall back to the other sources
+                return self.sample_without_shards(rng)
+        elif kind == 1:
             page = np.asarray(Image.open(self.page_paths[rng.integers(len(self.page_paths))]).convert("L"))
         else:
             page = np.asarray(synth_document(rng, self.cfg.generate))
@@ -263,6 +354,19 @@ class PageSource(torch.utils.data.IterableDataset):
             window = _draw_content(np.ascontiguousarray(window), rng)
         n = int(rng.integers(sc.strips_per_page[0], sc.strips_per_page[1] + 1))
         return ("page", np.ascontiguousarray(window), n)
+
+
+    def sample_without_shards(self, rng):
+        w = self.weights.copy()
+        w[3] = 0
+        if w.sum() == 0:
+            time.sleep(1)  # only shards configured and none ready yet
+            return self.sample(rng)
+        saved, self.weights = self.weights, w / w.sum()
+        try:
+            return self.sample(rng)
+        finally:
+            self.weights = saved
 
 
 def collate(items):
@@ -416,7 +520,7 @@ def train(cfg: Config) -> Path:
         opt, lambda s: min(1.0, (s + 1) / sc.warmup) * 0.5 * (1 + math.cos(math.pi * min(1.0, s / sc.steps)))
     )
     loader = torch.utils.data.DataLoader(
-        PageSource(cfg, cfg.seed + 10_000 + 1000 * rank), batch_size=sc.pages_per_batch, num_workers=sc.workers,
+        PageSource(cfg, cfg.seed + 10_000 + 1000 * rank, rank, world), batch_size=sc.pages_per_batch, num_workers=sc.workers,
         collate_fn=collate, prefetch_factor=4 if sc.workers else None, persistent_workers=bool(sc.workers),
         pin_memory=dev.type == "cuda",
     )

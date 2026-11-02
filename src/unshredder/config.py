@@ -86,7 +86,8 @@ class TrainConfig:
 @dataclass
 class SeamNetConfig:
     """Contrastive edge bi-encoder (seamnet.py). Training data: synthetic pages, real
-    intact pages (page_dirs) and real shredded documents (shred_dirs), mixed by weight."""
+    intact pages (page_dirs), PDFs from collected shards (shard_dir) and real shredded
+    documents (shred_dirs), mixed by weight."""
     model_path: str = "models/seamnet.pt"
     init_from: str | None = None  # checkpoint to fine-tune from
     band: int = 48  # px of each edge the encoder sees
@@ -106,6 +107,8 @@ class SeamNetConfig:
     synth_weight: float = 1.0
     page_weight: float = 1.0
     shred_weight: float = 0.0
+    shard_weight: float = 0.0  # PDFs streamed from collected tar shards (scripts/data/collect_finepdfs.py)
+    shard_dir: str = ""  # local shard cache filled by scripts/data/sync_shards.py; *.tar files are used as they appear
     page_dirs: list[str] = field(default_factory=list)
     shred_dirs: list[str] = field(default_factory=list)
     val_dirs: list[str] = field(default_factory=list)  # real shredded sets for validation
