@@ -550,7 +550,10 @@ def train(cfg: Config) -> Path:
     prof_at = int(os.environ.get("SEAMNET_PROFILE", "0"))  # profile 10 steps from this one on rank 0, then stop
     bal_at = int(os.environ.get("SEAMNET_BALANCE", "0"))  # log per-rank edges / gather wait for 10 steps from here
     prof = None
+    data_waits, t_fetch = [], time.time()
     for step, batch in enumerate(loader, start=1):
+        if bal_at and bal_at <= step < bal_at + 10:
+            data_waits.append(round(1000 * (time.time() - t_fetch)))
         if prof_at and main and step == prof_at:
             prof = torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU,
                                                       torch.profiler.ProfilerActivity.CUDA])
@@ -568,7 +571,7 @@ def train(cfg: Config) -> Path:
             rows = [r for r in _BALANCE_LOG if r != "on"]
             waits = [t2 - t1 for _, t1, t2 in rows]
             print(f"BALANCE rank {rank}: edges {[r[0] for r in rows]}  gather wait ms "
-                  f"{[round(1000 * w) for w in waits]}", flush=True)
+                  f"{[round(1000 * w) for w in waits]}  data wait ms {data_waits}", flush=True)
             _BALANCE_LOG.clear()
         with torch.no_grad():
             R, L, target = build_batch(batch, sc, gen, dev)
@@ -613,6 +616,7 @@ def train(cfg: Config) -> Path:
                 dist.barrier()
         if step >= sc.steps:
             break
+        t_fetch = time.time()
     if main:
         tracker.summary({"best_val_top1": best})
         tracker.finish()
