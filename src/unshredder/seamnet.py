@@ -471,6 +471,55 @@ def contrastive_loss(model: SeamNet, R: torch.Tensor, L: torch.Tensor, target: t
 # ---------------------------------------------------------------- training loop
 
 
+class CheckpointUploader:
+    """Copies checkpoints to S3 right after they are saved, in a background thread, so a lost node costs at
+    most one eval interval. Enabled when CKPT_S3_PREFIX (e.g. unshredder/models/run4) and S3_ACCESS_KEY /
+    S3_SECRET_KEY are set; endpoint/bucket default to our Hippius bucket."""
+
+    def __init__(self):
+        import os
+        from concurrent.futures import ThreadPoolExecutor
+
+        self.prefix = os.environ.get("CKPT_S3_PREFIX", "")
+        self.pool = ThreadPoolExecutor(1) if self.prefix else None
+        self.pending = []
+
+    def __call__(self, path: Path) -> None:
+        if not self.pool:
+            return
+        import shutil
+
+        snap = path.with_name(path.name + ".upload")  # a stable copy: the next save may overwrite `path`
+        shutil.copyfile(path, snap)
+        self.pending.append(self.pool.submit(self._upload, snap, f"{self.prefix}/{path.name}"))
+
+    @staticmethod
+    def _upload(snap: Path, key: str) -> None:
+        import os
+
+        import boto3
+        from botocore.config import Config
+
+        s3 = boto3.client("s3", endpoint_url=os.environ.get("CKPT_S3_ENDPOINT", "https://s3.hippius.com"),
+                          region_name="decentralized", aws_access_key_id=os.environ["S3_ACCESS_KEY"],
+                          aws_secret_access_key=os.environ["S3_SECRET_KEY"],
+                          config=Config(signature_version="s3v4", s3={"addressing_style": "path"},
+                                        retries={"mode": "adaptive", "max_attempts": 10}))
+        for attempt in range(6):
+            try:
+                s3.upload_file(str(snap), os.environ.get("CKPT_S3_BUCKET", "unshredder"), key)
+                print(f"  checkpoint uploaded: s3://.../{key}", flush=True)
+                break
+            except Exception as e:  # noqa: BLE001 - storage hiccups: retry, never stop training
+                print(f"  checkpoint upload failed ({e}); retry {attempt + 1}/6", flush=True)
+                time.sleep(30 * (attempt + 1))
+        snap.unlink(missing_ok=True)
+
+    def wait(self) -> None:
+        for f in self.pending:
+            f.result()
+
+
 def _setup_distributed():
     import os
 
@@ -545,6 +594,7 @@ def train(cfg: Config) -> Path:
     shift_rows = math.ceil(sc.max_shift / STRIDE)
     amp = dev.type == "cuda"
     tracker = Tracker(cfg.wandb_project if main else None, cfg.run_name or out.stem, cfg.to_dict(), "train")
+    upload = CheckpointUploader() if main else (lambda _p: None)
     t0, run_loss, run_acc, best = time.time(), 0.0, 0.0, -1.0
     if main:
         print(f"training on {world}x {dev.type}; sources synth/pages/shreds = "
@@ -601,6 +651,7 @@ def train(cfg: Config) -> Path:
             if main:
                 meta = {"band": sc.band, "dim": sc.dim, "row_context": sc.row_context, "step": step}
                 torch.save({"state_dict": model.state_dict(), **meta}, out.with_suffix(".last.pt"))
+                upload(out.with_suffix(".last.pt"))
                 if sc.val_dirs:
                     val = validate(model, sc.val_dirs, sc.val_docs, sc.band, shift_rows, dev)
                     per_doc = val.pop("per_page", {})
@@ -610,8 +661,10 @@ def train(cfg: Config) -> Path:
                     if val["top1"] > best:
                         best = val["top1"]
                         torch.save({"state_dict": model.state_dict(), **meta, "val": val}, out)
+                        upload(out)
                 else:
                     torch.save({"state_dict": model.state_dict(), **meta}, out)
+                    upload(out)
             if world > 1:
                 import torch.distributed as dist
 
@@ -620,6 +673,7 @@ def train(cfg: Config) -> Path:
             break
         t_fetch = time.time()
     if main:
+        upload.wait()
         tracker.summary({"best_val_top1": best})
         tracker.finish()
         print(f"done; model at {out} (best val top1={best:.4f})")
