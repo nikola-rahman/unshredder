@@ -85,3 +85,16 @@ length) so a second pass needs no re-scan and the size limit / lost sizes can be
 (2) second pass fetching the truncated ones from their original URLs (FinePDFs `url`), respecting
 robots.txt, rate-limited per host, stored separately and flagged as live-fetched with the date;
 (3) a small test on a sample first to see how many URLs are still online.
+
+### Two validation sets: academic and practical (raised 2026-11-02)
+Validate every run on two sets, logged side by side:
+1. Academic: D1/D2/D3 validation splits (as now) — comparison with published work on public benchmarks.
+2. Practical: Serbian documents.
+   a. Simulated (buildable now): held-out Serbian PDFs — the 36 evaluation PDFs (already excluded from
+      training via configs/finepdfs_eval_exclude.sha256) plus a few shards reserved and never synced for
+      training — rendered and cut by the GPU shredder with a fixed seed, so the set is identical every run.
+      Needs a validation mode for "rendered pages + simulator with fixed seed".
+   b. Real (needs physical work): 20-30 Serbian pages through a strip shredder like those used in the
+      ministries, scanned. The only end-to-end test of the actual use case; small but most valuable.
+Also noted: run 4 (no D1-D3 shreds) stays flat at ~0.37 pooled top-1 on the D1-D3 validation splits while
+its training accuracy rises — the sim-to-real gap; run 2 reached 0.90 by step 1,500 with D1-D3 real shreds.
