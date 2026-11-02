@@ -653,7 +653,8 @@ def train(cfg: Config) -> Path:
                 torch.save({"state_dict": model.state_dict(), **meta}, out.with_suffix(".last.pt"))
                 upload(out.with_suffix(".last.pt"))
                 if sc.val_dirs:
-                    val = validate(model, sc.val_dirs, sc.val_docs, sc.band, shift_rows, dev)
+                    review = bool(sc.val_review_every) and (step % sc.val_review_every == 0 or step == sc.steps)
+                    val = validate(model, sc.val_dirs, sc.val_docs, sc.band, shift_rows, dev, review=review)
                     per_doc = val.pop("per_page", {})
                     print(f"  val: {val}", flush=True)
                     tracker.log({f"val/{k}": v for k, v in val.items()}, step=step)
@@ -713,7 +714,7 @@ def embed(model: SeamNet, strips: list[np.ndarray], dev, batch: int = 32,
 
 
 @torch.no_grad()
-def validate(model: SeamNet, dirs: list[str], limit: int, band: int, shift_rows: int, dev) -> dict:
+def validate(model: SeamNet, dirs: list[str], limit: int, band: int, shift_rows: int, dev, review: bool = False) -> dict:
     """Pairwise top-1 on real shreds: per document, and with all docs pooled together."""
     strips, owner, index = [], [], []
     for d in dirs:
@@ -757,6 +758,8 @@ def validate(model: SeamNet, dirs: list[str], limit: int, band: int, shift_rows:
         truth[str(k)] = {"doc": owner[k], "index": rank[owner[k]], "flipped": False}
     recon = [[{"name": str(k), "flipped": False} for k, _ in ch] for ch in chains]
     out |= page_recovery(recon, truth, per_page=True)
+    if not review:  # the reviewer simulation is CPU-heavy (minutes while the model is still weak)
+        return out
 
     # Reviewer effort: decisions per document to get every validation document 100% right
     # (simulated oracle reviewer, at the model's best calibration; see review.py).

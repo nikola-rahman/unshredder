@@ -119,6 +119,7 @@ class SeamNetConfig:
     checkpoint: bool = False  # recompute trunk activations in backward (same gradients, less GPU memory)
     log_every: int = 50
     eval_every: int = 1000
+    val_review_every: int = 0  # also run the (slow, CPU) reviewer simulation every N steps and at the end; 0 = never
     device: str = "auto"
 
 
