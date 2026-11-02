@@ -151,3 +151,38 @@ Index: `s3://unshredder/unshredder/collect/finepdfs/srp_Cyrl/index.sqlite`, one 
 shard key and byte offset (one ranged GET per PDF). Shard 230 was overwritten after a resume (state.json
 lagged an uploaded shard); `repair_shard.py` found 743 mismatching rows and refetched all 743 into shard 942.
 Final check: 320/320 sampled PDFs (300 random + 20 from shards 230/942) match their SHA-256.
+
+## Run 4 and the Serbian validation set (2026-11-02)
+
+Run 4: run 2's page sources + Serbian PDFs streamed from shards, **no real D1–D3 shreds**, 8× RTX 5090,
+stopped at step 9,200 of 10,000 (checkpoint step 9,000: `s3://unshredder/unshredder/models/run4/`).
+
+Serbian practical validation set: 200 documents from 441 held-out websites (2% of domains, 15,209 PDFs in
+`heldout.txt`, skipped by training), drawn only from shards run 4 never had; cut with `cut_strips_full`.
+Sets and logs: `s3://unshredder/unshredder/runs/2026-11-02/`.
+
+top-1 pooled (each set its own pile, ±95% CI ≈ 0.01 Serbian, 0.02–0.06 D sets):
+
+| set | run 2 | run 4 |
+|---|---|---|
+| Serbian, simulator strength 1.0 | 0.415 | 0.160 |
+| Serbian, strength 1.0, no stretch | 0.522 | 0.198 |
+| Serbian, strength 0.5 (= run 4 training) | 0.701 | 0.383 |
+| Serbian, strength 0.5, no stretch | 0.718 | 0.401 |
+| D1 [0:15] | 0.850 | 0.812 |
+| D2 [0:5] | 0.843 | 0.094 |
+| D3 [0:25] | 0.959 | 0.070 |
+
+Why run 4 is worse (40 Serbian pages, strength 0.5, within-page top-1, ±0.025):
+
+| | training cutter, 1,024-row window | validation cutter, same window | validation cutter, full page |
+|---|---|---|---|
+| run 2 | 0.802 | 0.722 | 0.713 |
+| run 4 | 0.857 | 0.624 | 0.462 |
+
+- The training loop is fine (run 4 is best on training-style input). Run 4 overfits to `cut_bands` (the
+  fast edge-band cutter used in training) and to ink-dense 1,024-row windows; run 2 was kept honest by real
+  whole strips (D1–D3), which go through the same code path as validation.
+- Without real shreds, run 4 collapses on the noisy print–scan sets D2/D3.
+- Strength 1.0 was too harsh for a validation set; ±48 px vertical search does not change scores.
+- Conclusion: one cutter producing whole strips, calibrated against real shreds, including a print step.
