@@ -274,7 +274,8 @@ def make_batch(pages: torch.Tensor, n_strips: list[int], crop: int, band: int, m
 
 
 @torch.no_grad()
-def cut_strips_full(page: torch.Tensor, n: int, gen, strength: float, max_shift: int = 12) -> list[torch.Tensor]:
+def cut_strips_full(page: torch.Tensor, n: int, gen, strength: float, max_shift: int = 12,
+                    stretch: float = 0.015) -> list[torch.Tensor]:
     """Shred one whole page (1, 1, H, W) into n full-width degraded strips, left to right.
 
     Same physics as training (cut geometry, kerf, fraying, shift/stretch/curl, broken
@@ -301,7 +302,7 @@ def cut_strips_full(page: torch.Tensor, n: int, gen, strength: float, max_shift:
     right_edge = line[1:] - kerf_r[:, None]
 
     dy = (torch.rand(n, generator=gen, device=dev) * 2 - 1) * max_shift
-    stretch = 1 + (torch.rand(n, generator=gen, device=dev) * 2 - 1) * 0.015 * s
+    stretch = 1 + (torch.rand(n, generator=gen, device=dev) * 2 - 1) * stretch * s
     curl = _smooth_noise(gen, n, H, 12, dev) * _u(gen, n, 0, 3 * s, dev)[:, None]
     y_src = (yy[None] - H / 2) * stretch[:, None] + H / 2 + dy[:, None] + curl + m  # (n, H)
 

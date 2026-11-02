@@ -63,6 +63,8 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=200, help="documents (one page each) in the validation set")
     ap.add_argument("--percent", type=int, default=2, help="share of websites held out")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--strength", type=float, default=1.0, help="simulator strength (training used 0.5 in run 4)")
+    ap.add_argument("--stretch", type=float, default=0.015, help="max vertical stretch per strip at strength 1")
     ap.add_argument("--exclude-shards", help="file of shard names a model already trained on; never sample from them")
     a = ap.parse_args()
     seen = set(Path(a.exclude_shards).read_text().split()) if a.exclude_shards else set()
@@ -94,7 +96,7 @@ def main() -> None:
         n = int(rng.integers(25, 36))
         doc = out / f"D{made + 1:03d}" / "strips"
         doc.mkdir(parents=True, exist_ok=True)
-        for i, strip in enumerate(gpu_shred.cut_strips_full(t, n, gen, 1.0)):
+        for i, strip in enumerate(gpu_shred.cut_strips_full(t, n, gen, a.strength, stretch=a.stretch)):
             Image.fromarray((strip.numpy() * 255).round().astype(np.uint8)).save(doc / f"D{made + 1:03d}{i:02d}.png")
         sources.append(f"D{made + 1:03d}\t{pid}\t{url}")
         made += 1
