@@ -655,21 +655,23 @@ def train(cfg: Config) -> Path:
                 meta = {"band": sc.band, "dim": sc.dim, "row_context": sc.row_context, "step": step}
                 torch.save({"state_dict": model.state_dict(), **meta}, out.with_suffix(".last.pt"))
                 upload(out.with_suffix(".last.pt"))
-                if sc.val_dirs:
+                if sc.val_dirs or sc.val_dirs_practical:
                     review = bool(sc.val_review_every) and (step % sc.val_review_every == 0 or step == sc.steps)
-                    val = validate(model, sc.val_dirs, sc.val_docs, sc.band, shift_rows, dev, review=review)
-                    if sc.val_dirs_practical:  # practical goal: held-out Serbian documents (simulated cuts)
-                        vp = validate(model, sc.val_dirs_practical, sc.val_docs, sc.band, shift_rows, dev)
-                        vp.pop("per_page", None)
-                        print(f"  val_srp: {vp}", flush=True)
-                        tracker.log({f"val_srp/{k}": v for k, v in vp.items()}, step=step)
-                    per_doc = val.pop("per_page", {})
-                    print(f"  val: {val}", flush=True)
-                    tracker.log({f"val/{k}": v for k, v in val.items()}, step=step)
-                    tracker.log_distribution("val/recovery_distribution", per_doc, step=step)
-                    if val["top1"] > best:
-                        best = val["top1"]
-                        torch.save({"state_dict": model.state_dict(), **meta, "val": val}, out)
+                    # Each set is its own pile. Main (picks the best checkpoint): the held-out Serbian set
+                    # when given; D1/D2/D3 are informational (academic comparison).
+                    sets = {"srp": sc.val_dirs_practical} if sc.val_dirs_practical else {}
+                    sets |= {Path(d.split("[")[0]).name: [d] for d in sc.val_dirs}
+                    main_val = None
+                    for name, dirs in sets.items():
+                        val = validate(model, dirs, sc.val_docs, sc.band, shift_rows, dev, review=review)
+                        per_doc = val.pop("per_page", {})
+                        print(f"  val_{name}: {val}", flush=True)
+                        tracker.log({f"val_{name}/{k}": v for k, v in val.items()}, step=step)
+                        tracker.log_distribution(f"val_{name}/recovery_distribution", per_doc, step=step)
+                        main_val = main_val or val
+                    if main_val["top1_pooled"] > best:
+                        best = main_val["top1_pooled"]
+                        torch.save({"state_dict": model.state_dict(), **meta, "val": main_val}, out)
                         upload(out)
                 else:
                     torch.save({"state_dict": model.state_dict(), **meta}, out)
@@ -683,9 +685,9 @@ def train(cfg: Config) -> Path:
         t_fetch = time.time()
     if main:
         upload.wait()
-        tracker.summary({"best_val_top1": best})
+        tracker.summary({"best_val_top1_pooled": best})
         tracker.finish()
-        print(f"done; model at {out} (best val top1={best:.4f})")
+        print(f"done; model at {out} (best main val top1_pooled={best:.4f})")
     if world > 1:
         import torch.distributed as dist
 
