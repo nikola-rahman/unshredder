@@ -535,7 +535,21 @@ def train(cfg: Config) -> Path:
     if main:
         print(f"training on {world}x {dev.type}; sources synth/pages/shreds = "
               f"{loader.dataset.weights.round(2).tolist()}; augment={sc.augment}", flush=True)
+    import os
+
+    prof_at = int(os.environ.get("SEAMNET_PROFILE", "0"))  # profile 10 steps from this one on rank 0, then stop
+    prof = None
     for step, batch in enumerate(loader, start=1):
+        if prof_at and main and step == prof_at:
+            prof = torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU,
+                                                      torch.profiler.ProfilerActivity.CUDA])
+            prof.__enter__()
+        if prof is not None and step == prof_at + 10:
+            torch.cuda.synchronize()
+            prof.__exit__(None, None, None)
+            print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=25), flush=True)
+            print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=15), flush=True)
+            prof = None
         model.train()
         with torch.no_grad():
             R, L, target = build_batch(batch, sc, gen, dev)
