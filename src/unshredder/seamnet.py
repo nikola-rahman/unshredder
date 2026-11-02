@@ -728,6 +728,7 @@ def validate(model: SeamNet, dirs: list[str], limit: int, band: int, shift_rows:
     np.fill_diagonal(S, -np.inf)
     owner, index = np.array(owner), np.array(index)
     hits_doc = hits_all = total = 0
+    ranks_doc, ranks_all = [], []  # 0 = the true right neighbour scored highest
     for a in range(len(strips)):
         b = np.flatnonzero((owner == owner[a]) & (index == index[a] + 1))
         if not len(b):
@@ -736,7 +737,12 @@ def validate(model: SeamNet, dirs: list[str], limit: int, band: int, shift_rows:
         same = owner == owner[a]
         hits_doc += int(np.argmax(np.where(same, S[a], -np.inf)) == b[0])
         hits_all += int(np.argmax(S[a]) == b[0])
+        ranks_doc.append(int((np.where(same, S[a], -np.inf) > S[a, b[0]]).sum()))
+        ranks_all.append(int((S[a] > S[a, b[0]]).sum()))
     out = {"top1": round(hits_doc / max(1, total), 4), "top1_pooled": round(hits_all / max(1, total), 4), "pairs": total}
+    for k in (3, 5):  # the review app shows the top 5: is the true neighbour among them?
+        out[f"top{k}"] = round(float(np.mean(np.array(ranks_doc) < k)) if ranks_doc else 0.0, 4)
+        out[f"top{k}_pooled"] = round(float(np.mean(np.array(ranks_all) < k)) if ranks_all else 0.0, 4)
     # 95% binomial half-width; seams within a document are correlated, so read it as a floor.
     p_ = hits_all / max(1, total)
     out["top1_pooled_ci95"] = round(1.96 * math.sqrt(p_ * (1 - p_) / max(1, total)), 4)
