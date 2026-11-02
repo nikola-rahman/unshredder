@@ -406,22 +406,22 @@ def build_batch(batch: dict, sc, gen: torch.Generator, dev) -> tuple[torch.Tenso
 # ---------------------------------------------------------------- loss (single or multi GPU)
 
 
-def _gather(x: torch.Tensor, world: int) -> tuple[torch.Tensor, int, torch.Tensor]:
-    """Differentiable all-gather of a variable-size batch: returns the padded global
-    tensor, this rank's offset in it, and a validity mask."""
+def _gather_pair(a: torch.Tensor, b: torch.Tensor, world: int):
+    """Differentiable all-gather of two same-length, variable-size batches in ONE collective (the per-collective
+    latency dominates on PCIe-only multi-GPU boxes). Returns the padded global a and b, this rank's offset and a
+    validity mask."""
     import torch.distributed as dist
     import torch.distributed.nn.functional as dnn
 
-    n = torch.tensor([x.shape[0]], device=x.device)
+    n = torch.tensor([a.shape[0]], device=a.device)
     sizes = [torch.zeros_like(n) for _ in range(world)]
     dist.all_gather(sizes, n)
     sizes = [int(v) for v in sizes]
     m = max(sizes)
-    padded = F.pad(x, (0, 0) * (x.dim() - 1) + (0, m - x.shape[0]))
-    parts = dnn.all_gather(padded)
-    valid = torch.cat([torch.arange(m, device=x.device) < k for k in sizes])
-    offset = dist.get_rank() * m
-    return torch.cat(parts), offset, valid
+    pad = (0, 0) * (a.dim() - 1) + (0, m - a.shape[0])
+    parts = dnn.all_gather(torch.stack([F.pad(a, pad), F.pad(b, pad)]))
+    valid = torch.cat([torch.arange(m, device=a.device) < k for k in sizes])
+    return torch.cat([p[0] for p in parts]), torch.cat([p[1] for p in parts]), dist.get_rank() * m, valid
 
 
 def contrastive_loss(model: SeamNet, R: torch.Tensor, L: torch.Tensor, target: torch.Tensor, max_shift: int,
@@ -432,8 +432,7 @@ def contrastive_loss(model: SeamNet, R: torch.Tensor, L: torch.Tensor, target: t
     n, h = er.shape[0], er.shape[2]
     dev = er.device
     if world > 1:  # exchange in the encoder's own precision (bf16): same values, half the bytes on the GPU links
-        er_g, offset, valid = _gather(er_h, world)
-        el_g, _, _ = _gather(el_h, world)
+        er_g, el_g, offset, valid = _gather_pair(er_h, el_h, world)
         er_g, el_g = er_g.float(), el_g.float()
     else:
         er_g, el_g, offset, valid = er, el, 0, torch.ones(n, dtype=torch.bool, device=dev)
@@ -457,7 +456,7 @@ def contrastive_loss(model: SeamNet, R: torch.Tensor, L: torch.Tensor, target: t
 
     with torch.no_grad():
         acc = (torch.cat([S_r, null], 1).argmax(1) == t_row).float().mean()
-    return (loss_r + loss_l) / 2, acc.item()
+    return (loss_r + loss_l) / 2, acc  # a tensor: reading it (.item()) would make the CPU wait for the GPU
 
 
 # ---------------------------------------------------------------- training loop
@@ -564,9 +563,10 @@ def train(cfg: Config) -> Path:
         nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step()
         sched.step()
-        run_loss += loss.item()
+        run_loss += loss.detach()  # running totals stay on the GPU; read once per log step
         run_acc += acc
         if step % sc.log_every == 0 and main:
+            run_loss, run_acc = float(run_loss), float(run_acc)
             print(f"step {step}/{sc.steps}  loss={run_loss / sc.log_every:.4f}  batch_top1={run_acc / sc.log_every:.3f}  "
                   f"edges/step={R.shape[0] * world}  lr={sched.get_last_lr()[0]:.2e}  [{time.time() - t0:.0f}s]",
                   flush=True)
